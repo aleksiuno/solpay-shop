@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -35,7 +36,7 @@ func New(endpoint string) (*Client, error) {
 		return nil, errors.New("solana: the RPC endpoint is not a valid URL")
 	}
 	hc := &http.Client{Timeout: requestTimeout}
-	jc := jsonrpc.NewClientWithOpts(endpoint, &jsonrpc.RPCClientOpts{HTTPClient: hc})
+	jc := jsonrpc.NewClientWithOpts(endpoint, &jsonrpc.RPCClientOpts{HTTPClient: endpointClient{hc}})
 	return &Client{rpc: rpc.NewWithCustomRPCClient(limited{jc, rate.NewLimiter(rate.Every(callEvery), 1)})}, nil
 }
 
@@ -51,7 +52,7 @@ func (c *Client) Signatures(ctx context.Context, reference string, limit int) ([
 		Commitment: rpc.CommitmentConfirmed,
 	})
 	if err != nil {
-		return nil, classify(err)
+		return nil, c.fail(ctx, err)
 	}
 	if out == nil { // [] decodes to an empty slice; nil means the reply had no result at all
 		return nil, errors.New("solana: getSignaturesForAddress returned no result")
@@ -83,7 +84,7 @@ func (c *Client) Transaction(ctx context.Context, signature string) (Tx, error) 
 		MaxSupportedTransactionVersion: &maxVersion,
 	})
 	if err != nil {
-		return Tx{}, classify(err)
+		return Tx{}, c.fail(ctx, err)
 	}
 	tx, err := toTx(res)
 	if err != nil {
@@ -99,12 +100,38 @@ func (c *Client) Transaction(ctx context.Context, signature string) (Tx, error) 
 func (c *Client) CheckDevnet(ctx context.Context) error {
 	hash, err := c.rpc.GetGenesisHash(ctx)
 	if err != nil {
-		return classify(err)
+		return c.fail(ctx, err)
 	}
 	if hash.String() != DevnetGenesisHash {
 		return fmt.Errorf("%w: genesis hash %s", ErrNotDevnet, hash)
 	}
 	return nil
+}
+
+// fail classifies err. When ctx has ended, err is reported as the context's error, even if it came
+// from reading a body that the end cut short.
+func (c *Client) fail(ctx context.Context, err error) error {
+	if ce := ctx.Err(); ce != nil && !errors.Is(err, ce) {
+		err = fmt.Errorf("%w: %w", ce, err)
+	}
+	return classify(err)
+}
+
+// endpointClient is the *http.Client under solana-go. It turns every HTTP 429 into a
+// *jsonrpc.HTTPError: when the body is a JSON-RPC error, solana-go returns that error and drops
+// the status, and providers mark rate limiting with codes of their own.
+type endpointClient struct {
+	*http.Client
+}
+
+func (c endpointClient) Do(req *http.Request) (*http.Response, error) {
+	resp, err := c.Client.Do(req) //nolint:gosec // G704: the URL is the configured RPC endpoint
+	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // lets the connection be reused
+		_ = resp.Body.Close()
+		return nil, jsonrpc.NewHTTPError(http.StatusTooManyRequests, errors.New("HTTP 429 Too Many Requests"))
+	}
+	return resp, err
 }
 
 // limited makes every call wait for the shared rate limiter first.

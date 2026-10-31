@@ -11,8 +11,8 @@ import (
 )
 
 // Every error that Signatures and Transaction return falls into one of five classes, and
-// CheckDevnet adds a sixth, ErrNotDevnet. A context canceled or expired before the answer passes
-// through, so errors.Is finds context.Canceled or context.DeadlineExceeded. Three of the five have a sentinel
+// CheckDevnet adds a sixth, ErrNotDevnet. A canceled or expired context passes through, so
+// errors.Is finds context.Canceled or context.DeadlineExceeded. Three of the five have a sentinel
 // below, as does ErrNotDevnet. Any other error is transient, such as a refused connection, a 5xx
 // answer or a reply that solana-go cannot parse, and the same call may work on the next tick. The
 // original error stays in the chain, so errors.As still finds a *jsonrpc.RPCError or
@@ -20,7 +20,7 @@ import (
 var (
 	// ErrNotFound: the node returned null for a transaction it has not indexed yet. Retry later.
 	ErrNotFound = errors.New("solana: not found")
-	// ErrRateLimited: HTTP 429, as a JSON-RPC error with code 429 or as a plain HTTP answer.
+	// ErrRateLimited: an HTTP 429 answer, whatever its body, or a JSON-RPC error with code 429.
 	// Back off.
 	ErrRateLimited = errors.New("solana: rate limited")
 	// ErrPermanent: asking again cannot help. The transaction is in a version the client does not
