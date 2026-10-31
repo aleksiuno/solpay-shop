@@ -1,0 +1,58 @@
+{
+  "blockTime": 1793480098,
+  "meta": {
+    "computeUnitsConsumed": 150,
+    "costUnits": 1481,
+    "err": {
+      "InstructionError": [
+        0,
+        {
+          "Custom": 1
+        }
+      ]
+    },
+    "fee": 5000,
+    "innerInstructions": [],
+    "loadedAddresses": {
+      "readonly": [],
+      "writable": []
+    },
+    "logMessages": [
+      "Program 11111111111111111111111111111111 invoke [1]",
+      "Transfer: insufficient lamports 4997985000, need 10000000000",
+      "Program 11111111111111111111111111111111 failed: custom program error: 0x1"
+    ],
+    "postBalances": [
+      4997985000,
+      2000000,
+      1,
+      0
+    ],
+    "postTokenBalances": [],
+    "preBalances": [
+      4997990000,
+      2000000,
+      1,
+      0
+    ],
+    "preTokenBalances": [],
+    "rewards": [],
+    "status": {
+      "Err": {
+        "InstructionError": [
+          0,
+          {
+            "Custom": 1
+          }
+        ]
+      }
+    }
+  },
+  "slot": 517261348,
+  "transaction": [
+    "AWt914xnZODYMfRefYziFC0VF8phUo7Q2UDmLWyeT4u2bCs+Y/gh2UrzJOB5wt18iqOtDKpCDSb54rDbSiHIxQoBAAIEt7eh0PIfLh1Svq/rBCTtqsCSmSXpNWg27d0AkgtWwwoxTXsUd95fmBjIfXJLC2TqGfT3zdEInnyV/tmEUPT0qgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAtS1myF9GIOHMbjtptFZy/9EKdGCDHGKwVHZwgY2PAEon8qI0pYSgGqm8y86PHthhz9nCz3i0nvsAeeF6lfQOOQECAwABAwwCAAAAAOQLVAIAAAA=",
+    "base64"
+  ],
+  "transactionIndex": 19,
+  "version": "legacy"
+}

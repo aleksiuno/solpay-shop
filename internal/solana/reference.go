@@ -13,6 +13,9 @@ import (
 // mainnet by mistake.
 const DevnetGenesisHash = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 
+// SystemProgram is the address of the System Program, which moves SOL between accounts.
+const SystemProgram = "11111111111111111111111111111111"
+
 // NewReference returns a fresh payment reference: 32 random bytes in base58, the form of a Solana
 // address. The payment lists it as a read-only account, so the shop finds the payment by querying
 // the reference. It is not a keypair: an account that never signs needs no private key, and it
