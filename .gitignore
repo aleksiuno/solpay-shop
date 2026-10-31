@@ -1,0 +1,38 @@
+# --- Local-only files (never committed) ---
+/.notes/
+/PLAN.md
+/NOTES.md
+
+# --- Secrets & local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Solana keypairs (solana-keygen writes JSON arrays of secret-key bytes)
+id.json
+*keypair*.json
+wallet*.json
+
+# --- Runtime data (FILES_DIR, LOG_FILE, local volumes) ---
+# Only testdata/ ships sample product files.
+/data/
+*.log
+
+# --- Go build & test output ---
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+*.prof
+coverage.*
+go.work
+go.work.sum
+
+# --- Editors & OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
