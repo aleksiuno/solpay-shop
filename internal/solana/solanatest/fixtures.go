@@ -85,3 +85,13 @@ func (f Fixture) JSON(t testing.TB) []byte {
 	}
 	return b
 }
+
+// Tx returns the fixture decoded with solana.DecodeTxJSON.
+func (f Fixture) Tx(t testing.TB) solana.Tx {
+	t.Helper()
+	tx, err := solana.DecodeTxJSON(f.JSON(t))
+	if err != nil {
+		t.Fatalf("decode fixture %s: %v", f.File, err)
+	}
+	return tx
+}
