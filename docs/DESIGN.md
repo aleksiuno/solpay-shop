@@ -54,6 +54,11 @@ package, `internal/solanapay`, builds and parses. The URL carries the amount in 
 `internal/money` converts between lamports and SOL with integer arithmetic only, because a float64
 rounds lamports.
 
+Neither a plain wallet Send nor `solana transfer` can attach a reference, so the repository
+includes devpay, a small command that pays a Solana Pay URL on devnet the way a Solana Pay wallet
+does: the references go on the transfer as read-only accounts. It checks the RPC node's genesis
+hash before it sends anything, so it cannot pay on mainnet by mistake.
+
 Configuration comes only from the environment. Secrets and the merchant address live only in
 `.env`, which is never committed: `make env` generates the secrets, and compose refuses to start
 without them.
