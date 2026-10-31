@@ -42,6 +42,15 @@ packages to implement their storage interfaces, never the other way round, and `
 the pieces together. Within the server, only `internal/solana` imports the Solana SDK: the rest of
 the code works with plain Go types, and tests can swap in a fake client.
 
+Interfaces belong to the code that uses them: the payment watcher will declare the few chain calls
+it needs, and `internal/solana` exports a concrete client and plain types. Test support, the
+recorded devnet transactions and deterministic test keys, lives in `internal/solana/solanatest`, so
+no test code ships in a production package. The client spaces all its calls, one every 1.25 s, below
+the public devnet endpoint's limit of about ten per method per ten seconds. It sorts every failure
+into one of five classes: the caller's context ended, rate limited, not indexed yet, permanent (a
+retry cannot help) or transient; the genesis check adds a sixth, a cluster that is not devnet. A
+keyed endpoint's URL never appears in its errors.
+
 The payment watcher is a goroutine in the same process. Each order has its own reference, a random
 32-byte address that the customer's payment lists as an extra account. On each tick the watcher
 asks the RPC node for the transactions that mention the reference of each pending, underpaid or
