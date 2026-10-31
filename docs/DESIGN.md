@@ -70,6 +70,19 @@ count towards the amount: a top-up that is still short leaves the order underpai
 after the deadline is recorded as late without changing the status. A refund is marked by an admin;
 the SOL itself is returned outside the shop.
 
+## Data model
+
+Four tables. `products` holds the catalogue. `orders` holds each order's state: the amount is a
+snapshot of price times quantity, and `received_lamports` is the sum of the payments credited to
+it. `payments` is the ledger: one row per transaction signature, which is a global primary key, so
+a transaction credits at most one order, and only once. `payment_events` is an append-only log
+of what happened to each order and what the watcher saw (orders created, payments seen, RPC
+errors), ordered by its identity column; nothing reads it to decide state. Amounts are integers in
+lamports throughout; SOL appears only in pages and in the payment URL.
+
+Alternative considered: a single `paid_signature` column on `orders`. It cannot represent a top-up,
+where one order is paid by several transactions.
+
 ## Out of scope
 
 Deliberately not built: user accounts, carts with several products, taxes and shipping, mainnet,
