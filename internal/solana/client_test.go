@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -277,6 +279,83 @@ func TestRefusesBadArguments(t *testing.T) {
 
 	_, err = solana.New("http://user:pw-SECRET@%zz")
 	require.EqualError(t, err, "solana: the RPC endpoint is not a valid URL")
+}
+
+func TestKeyedEndpointIsHidden(t *testing.T) {
+	answers := map[string]node{
+		"503":       {status: http.StatusServiceUnavailable, body: "upstream unavailable"},
+		"plain 429": {status: http.StatusTooManyRequests, body: "slow down"},
+		"JSON 429":  {status: http.StatusTooManyRequests, body: rpcError(-32007, "request limit reached")},
+		// solana-go reports these two in its own error, which names the URL as well.
+		"307 without a location":  {status: http.StatusTemporaryRedirect},
+		"a reply it cannot parse": {status: http.StatusOK, body: "not json"},
+	}
+	// Each has the key in its credentials, path or query; the last prints differently once
+	// parsed (lower-case scheme, an escaped space), which the client must hide as well.
+	keyed := []string{
+		"http://user:pw-SECRET@%s/v2/key-SECRET?api-key=SECRET\u200b",
+		"HTTP://user:pw-SECRET@%s/v2/key SECRET/?api-key=SECRET",
+	}
+	for name, a := range answers {
+		for call, do := range calls {
+			for _, k := range keyed {
+				t.Run(name+"/"+call, func(t *testing.T) {
+					n := a
+					n.t = t
+					srv := httptest.NewServer(&n)
+					t.Cleanup(srv.Close)
+					host := strings.TrimPrefix(srv.URL, "http://")
+					c, err := solana.New(strings.Replace(k, "%s", host, 1))
+					require.NoError(t, err)
+
+					err = do(t.Context(), c)
+					require.Error(t, err)
+					assert.NotContains(t, err.Error(), "SECRET")
+					assert.Contains(t, err.Error(), "http://"+host)
+				})
+			}
+		}
+	}
+
+	// Nothing listens on port 1 (nor, in CI, on port 80): net/http's own error quotes the URL.
+	for _, endpoint := range []string{
+		"http://user:pw-SECRET@127.0.0.1:1/v2/key-SECRET?api-key=SECRET",
+		"http://127.0.0.1:1/?api-key=SECRET\u200b",
+		`http://127.0.0.1:1/?api-key=SECRET"`,
+		"HTTP://127.0.0.1:1/v2/key SECRET/",
+		"http://user:pw-SECRET@127.0.0.1:/v2/key-SECRET?api-key=SECRET", // an empty port
+	} {
+		for call, do := range calls {
+			c, err := solana.New(endpoint)
+			require.NoError(t, err)
+			err = do(t.Context(), c)
+			require.Error(t, err, call)
+			assert.NotContains(t, err.Error(), "SECRET", "%s %s", call, endpoint)
+			assert.Contains(t, err.Error(), "http://127.0.0.1", "%s %s", call, endpoint)
+		}
+	}
+}
+
+func TestFollowsNoRedirect(t *testing.T) {
+	for call, do := range calls {
+		t.Run(call, func(t *testing.T) {
+			var hits atomic.Int32
+			other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":"`+solana.DevnetGenesisHash+`"}`)
+			}))
+			t.Cleanup(other.Close)
+			named := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
+			}))
+			t.Cleanup(named.Close)
+			c, err := solana.New(named.URL)
+			require.NoError(t, err)
+
+			require.Error(t, do(t.Context(), c))
+			assert.Zero(t, hits.Load(), "no call reaches the node the redirect names")
+		})
+	}
 }
 
 func TestClientCallsShareTheLimiter(t *testing.T) {
