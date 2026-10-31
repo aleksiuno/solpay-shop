@@ -20,7 +20,8 @@ import (
 )
 
 // node is a JSON-RPC endpoint. It checks the method (when set) and the params (when set), then
-// answers with result, or with status and body when status is set.
+// answers with result; or with status and body, when status is set; or with the first bytes of
+// a body, after which it stalls until the client gives up, when stall is set.
 type node struct {
 	t      *testing.T
 	method string
@@ -29,6 +30,7 @@ type node struct {
 	status int
 	body   string
 	delay  time.Duration
+	stall  string
 }
 
 func (n *node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,12 @@ func (n *node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
+	case n.stall != "":
+		_, _ = io.WriteString(w, n.stall)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
 	case n.status != 0:
 		w.WriteHeader(n.status)
 		_, _ = io.WriteString(w, n.body)
@@ -170,7 +178,9 @@ func TestErrorClasses(t *testing.T) {
 		as   any   // a type errors.As must still find
 	}{
 		"HTTP 429 with JSON-RPC code 429": {node: node{status: http.StatusTooManyRequests, body: rpcError(429, "Too many requests for a specific RPC call")},
-			want: solana.ErrRateLimited, as: new(*jsonrpc.RPCError)},
+			want: solana.ErrRateLimited, as: new(*jsonrpc.HTTPError)},
+		"HTTP 429 with a provider's own code": {node: node{status: http.StatusTooManyRequests, body: rpcError(-32007, "15/second request limit reached")},
+			want: solana.ErrRateLimited, as: new(*jsonrpc.HTTPError)},
 		"HTTP 429 as plain text": {node: node{status: http.StatusTooManyRequests, body: "Too Many Requests"},
 			want: solana.ErrRateLimited, as: new(*jsonrpc.HTTPError)},
 		"JSON-RPC code 429 with HTTP 200": {node: node{status: http.StatusOK, body: rpcError(429, "Too many requests")},
@@ -236,8 +246,9 @@ func TestContextEndsPassThrough(t *testing.T) {
 		cancel bool // cancel after 50 ms; otherwise a 50 ms deadline
 		want   error
 	}{
-		"deadline before the answer": {node: node{delay: time.Second}, want: context.DeadlineExceeded},
-		"cancel before the answer":   {node: node{delay: time.Second}, cancel: true, want: context.Canceled},
+		"deadline before the answer":    {node: node{delay: time.Second}, want: context.DeadlineExceeded},
+		"deadline while reading a body": {node: node{stall: `{"jsonrpc":"2.0","id":1,"result":`}, want: context.DeadlineExceeded},
+		"cancel while reading a body":   {node: node{stall: `{"jsonrpc":"2.0","id":1,"result":`}, cancel: true, want: context.Canceled},
 	}
 	for name, tt := range tests {
 		for call, do := range calls {
