@@ -48,6 +48,11 @@ asks the RPC node for the transactions that mention the reference of each pendin
 recently expired order, verifies them, and records each result and its events in one database
 transaction.
 
+Payment requests are Solana Pay URLs (`solana:<merchant>?amount=…&reference=…`), which a pure
+package, `internal/solanapay`, builds and parses. The URL carries the amount in decimal SOL, and
+`internal/money` converts between lamports and SOL with integer arithmetic only, because a float64
+rounds lamports.
+
 Configuration comes only from the environment. Secrets and the merchant address live only in
 `.env`, which is never committed: `make env` generates the secrets, and compose refuses to start
 without them.
