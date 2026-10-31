@@ -1,0 +1,2 @@
+# Recorded RPC fixtures are collapsed in pull request diffs.
+internal/solana/solanatest/testdata/*.json linguist-generated=true
