@@ -11,6 +11,14 @@ import (
 	"github.com/gagliardetto/solana-go/rpc"
 )
 
+// SignatureInfo is one transaction that mentions an address, as getSignaturesForAddress lists it.
+type SignatureInfo struct {
+	Signature string
+	Slot      int64
+	BlockTime *time.Time // nil when the node does not know it
+	Failed    bool
+}
+
 // Instruction is one top-level instruction. ProgramIndex and Accounts index Tx.Keys.
 type Instruction struct {
 	ProgramIndex int
