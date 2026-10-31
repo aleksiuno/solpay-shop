@@ -19,8 +19,10 @@ curl localhost:8080/healthz      # prints ok
 ```
 
 `make env` prints the ways to get a devnet address; the shop needs only the address, never the
-secret key. Without `make`, run `cp .env.example .env`, replace every placeholder and set
-`POSTGRES_PASSWORD` (letters and digits only).
+secret key. One of them needs only Docker: it runs this repository's devpay command in the Go
+image, which writes a keypair to `data/` and prints its address. Without `make`, run
+`cp .env.example .env`, replace every placeholder and set `POSTGRES_PASSWORD` (letters and digits
+only).
 
 Compose starts Postgres, applies the migrations, loads two demo products and starts the app on
 `127.0.0.1:8080`. If it stops at `migrate`, `docker compose logs migrate` names the setting to fix

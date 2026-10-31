@@ -21,7 +21,10 @@ env: ## Create .env from .env.example with generated secrets (never overwrites .
 	echo "Now set MERCHANT_ADDRESS in .env to the address of a devnet-only wallet you control."; \
 	echo "The shop needs only the address, never the secret key. Ways to get one:"; \
 	echo "  Phantom with Testnet Mode on (Solana Devnet): copy the account address"; \
-	echo "  solana-keygen pubkey <keypair.json>"
+	echo "  solana-keygen pubkey <keypair.json>"; \
+	echo "  go run ./cmd/devpay -new-keypair data/merchant.json   (prints the address)"; \
+	echo "  With Docker only (no Go, no Solana CLI), the same devpay command:"; \
+	echo '    docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$PWD":/src -w /src golang:1.27.3-alpine3.24 go run ./cmd/devpay -new-keypair data/merchant.json'
 
 up: ## Build and start the stack (Postgres, migrations, demo seed, app) in the background
 	VERSION=$(VERSION) docker compose up --build -d || { docker compose logs --no-log-prefix migrate seed; exit 1; }
