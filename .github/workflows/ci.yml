@@ -31,3 +31,11 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: docker build
         run: docker build --build-arg VERSION="$GITHUB_SHA" -t solpay-shop:ci .
+      - name: compose config
+        run: docker compose config --quiet
+        env: # placeholders: compose only checks that the required values are set
+          POSTGRES_PASSWORD: ci
+          MERCHANT_ADDRESS: ci
+          ADMIN_USER: ci
+          ADMIN_PASS: ci
+          DOWNLOAD_SECRET: ci

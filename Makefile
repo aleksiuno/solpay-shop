@@ -1,8 +1,10 @@
 .DEFAULT_GOAL := help
 GOLANGCI_VERSION := v2.15.0
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LINT := $(shell command -v golangci-lint 2>/dev/null || echo docker run --rm -v $(CURDIR):/app -w /app golangci/golangci-lint:$(GOLANGCI_VERSION) golangci-lint)
+LOAD_ENV := set -a; [ -f .env ] || { echo "missing .env: run make env" >&2; exit 1; }; . ./.env; set +a
 
-.PHONY: help env test test-integration lint fmt tidy
+.PHONY: help env up down logs run migrate seed test test-integration lint fmt tidy
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -20,6 +22,26 @@ env: ## Create .env from .env.example with generated secrets (never overwrites .
 	echo "The shop needs only the address, never the secret key. Ways to get one:"; \
 	echo "  Phantom with Testnet Mode on (Solana Devnet): copy the account address"; \
 	echo "  solana-keygen pubkey <keypair.json>"
+
+up: ## Build and start the stack (Postgres, migrations, demo seed, app) in the background
+	VERSION=$(VERSION) docker compose up --build -d || { docker compose logs --no-log-prefix migrate seed; exit 1; }
+	@echo "solpay-shop is up; make logs follows it"
+
+down: ## Stop the stack and keep the database volume
+	docker compose down
+
+logs: ## Follow the app logs
+	docker compose logs -f app
+
+run: ## Run the server locally against the compose database
+	docker compose up -d --wait db
+	$(LOAD_ENV); go run ./cmd/server
+
+migrate: ## Apply pending migrations to the database named in .env (DATABASE_URL)
+	$(LOAD_ENV); go run ./cmd/server -migrate-only
+
+seed: ## Load the demo products (needs a migrated database; safe to repeat)
+	docker compose run --rm --no-deps seed
 
 test: ## Unit tests with the race detector
 	go test -race ./...

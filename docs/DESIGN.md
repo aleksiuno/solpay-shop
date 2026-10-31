@@ -48,6 +48,13 @@ asks the RPC node for the transactions that mention the reference of each pendin
 recently expired order, verifies them, and records each result and its events in one database
 transaction.
 
+Configuration comes only from the environment. Secrets and the merchant address live only in
+`.env`, which is never committed: `make env` generates the secrets, and compose refuses to start
+without them.
+
+Logs are JSON lines on stdout, plus an optional file (`LOG_FILE`) for runs on the host. Under
+compose the app logs to stdout only, because Docker already keeps it.
+
 The server applies pending migrations when it starts, so `go run ./cmd/server` needs no separate
 step. golang-migrate holds a Postgres advisory lock while it runs, so servers that start together
 apply each migration once. Compose runs the same image once with `-migrate-only` first, so the
