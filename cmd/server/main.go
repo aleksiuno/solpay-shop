@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,13 +16,25 @@ import (
 	"time"
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
+	"github.com/aleksiuno/solpay-shop/internal/db"
 )
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 // shutdownTimeout stays below Docker's default 10 s stop grace period, so a shutdown that times
 // out is still logged before the container is killed.
 const shutdownTimeout = 8 * time.Second
 
 func main() {
+	migrateOnly := flag.Bool("migrate-only", false, "apply pending database migrations and exit")
+	flag.Parse()
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected arguments: %v\n", flag.Args())
+		flag.Usage()
+		os.Exit(2)
+	}
+
 	stdout := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -34,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	runErr := run(logger, cfg)
+	runErr := run(logger, cfg, *migrateOnly)
 	if runErr != nil {
 		// Logged before the file is closed, so LOG_FILE also records why the server stopped.
 		logger.Error("server exited with an error", "error", runErr)
@@ -47,9 +60,25 @@ func main() {
 	}
 }
 
-func run(logger *slog.Logger, cfg config.Config) error {
+func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// After the first signal, restore the default handlers, so a second Ctrl-C kills the process in
+	// any phase, including a migration that is still connecting or waiting for its lock.
+	context.AfterFunc(ctx, stop)
+
+	logger.InfoContext(ctx, "starting", "version", version, "migrate_only", migrateOnly)
+	if err := db.Migrate(cfg.DatabaseURL); err != nil {
+		return err
+	}
+	logger.InfoContext(ctx, "database schema is up to date")
+	if migrateOnly {
+		return nil
+	}
+	if ctx.Err() != nil {
+		logger.InfoContext(ctx, "stopping before the server starts", "cause", context.Cause(ctx))
+		return nil
+	}
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
@@ -81,7 +110,6 @@ func run(logger *slog.Logger, cfg config.Config) error {
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}
-	stop() // a second Ctrl-C now kills the process instead of waiting for the shutdown
 
 	logger.InfoContext(ctx, "shutting down", "cause", context.Cause(ctx))
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)

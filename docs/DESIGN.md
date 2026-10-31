@@ -48,6 +48,11 @@ asks the RPC node for the transactions that mention the reference of each pendin
 recently expired order, verifies them, and records each result and its events in one database
 transaction.
 
+The server applies pending migrations when it starts, so `go run ./cmd/server` needs no separate
+step. golang-migrate holds a Postgres advisory lock while it runs, so servers that start together
+apply each migration once. Compose runs the same image once with `-migrate-only` first, so the
+demo seed always finds the schema; the app's own check then finds nothing to apply.
+
 ## Order state machine
 
 ```
