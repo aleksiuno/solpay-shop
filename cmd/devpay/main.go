@@ -16,6 +16,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -98,6 +101,11 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 	if *keypair == "" {
 		return usageError(stderr, "-keypair is required: the wallet that pays")
 	}
+	ep, err := parseEndpoint(*rpcURL)
+	if err != nil {
+		return usageError(stderr, err.Error())
+	}
+	msgs := redacting{stderr, ep.hide}
 	req, err := solanapay.Parse(fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "devpay: payment URL: %v\n", err)
@@ -114,9 +122,9 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 	context.AfterFunc(ctx, stop) // after the first signal, a second one kills devpay
 	ctx, cancel := context.WithTimeout(ctx, payTimeout)
 	defer cancel()
-	sig, err := pay(ctx, rpc.NewWithTimeout(*rpcURL, rpcTimeout), key, req, stderr)
+	sig, err := pay(ctx, ep.client(), key, req, msgs)
 	if err != nil {
-		fmt.Fprintf(stderr, "devpay: %v\n", err)
+		fmt.Fprintf(msgs, "devpay: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, sig)
@@ -127,6 +135,69 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 func usageError(stderr io.Writer, msg string) int {
 	fmt.Fprintf(stderr, "devpay: %s (devpay -h shows the usage)\n", msg)
 	return 2
+}
+
+// endpoint is a checked -rpc URL: https, or plain http only to a loopback host. A keyed endpoint
+// carries its API key in the URL's path, query or userinfo, so devpay names it only as
+// scheme://host: the client rewrites the URL in net/http's errors, which quote it, and hide
+// replaces it in solana-go's messages, which print it as url.URL.String does.
+type endpoint struct {
+	raw, safe string
+	hide      *strings.Replacer
+}
+
+// parseEndpoint checks raw. The error never repeats it.
+func parseEndpoint(raw string) (endpoint, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
+		return endpoint{}, errors.New("-rpc wants an https URL, or http to localhost")
+	}
+	safe := u.Scheme + "://" + u.Host
+	return endpoint{raw: raw, safe: safe, hide: strings.NewReplacer(raw, safe, u.String(), safe)}, nil
+}
+
+func isLoopback(host string) bool {
+	ip := net.ParseIP(host)
+	return host == "localhost" || ip != nil && ip.IsLoopback()
+}
+
+// client returns an RPC client for e whose errors name the endpoint only as e.safe.
+func (e endpoint) client() *rpc.Client {
+	hc := &http.Client{
+		Timeout: rpcTimeout,
+		// The genesis check vouches for this endpoint only, so a redirect must not take the
+		// signed transaction to another node, which could be on another cluster.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return rpc.NewWithCustomRPCClient(jsonrpc.NewClientWithOpts(e.raw, &jsonrpc.RPCClientOpts{HTTPClient: hidingClient{hc, e.safe}}))
+}
+
+// hidingClient is an *http.Client whose errors give the endpoint as safe.
+type hidingClient struct {
+	*http.Client
+	safe string
+}
+
+func (c hidingClient) Do(req *http.Request) (*http.Response, error) {
+	resp, err := c.Client.Do(req) //nolint:gosec // G704: the URL is the -rpc endpoint the user chose, checked by parseEndpoint
+	if ue, ok := errors.AsType[*url.Error](err); ok {
+		ue.URL = c.safe
+	}
+	return resp, err
+}
+
+// redacting writes to w with r applied. Every message is one Write call, so a URL is never split
+// across two.
+type redacting struct {
+	w io.Writer
+	r *strings.Replacer
+}
+
+func (rw redacting) Write(p []byte) (int, error) {
+	if _, err := rw.r.WriteString(rw.w, string(p)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 // writeKeypair creates a keypair and writes it to path in the solana-keygen format, a JSON array

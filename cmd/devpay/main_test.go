@@ -449,6 +449,41 @@ func TestConfirmRetriesFailedChecks(t *testing.T) {
 	assert.Contains(t, log.String(), "Status check failed, retrying")
 }
 
+func TestParseEndpoint(t *testing.T) {
+	for _, ok := range []string{"https://api.devnet.solana.com", "http://localhost:8899", "http://127.0.0.1:8899", "http://[::1]:8899"} {
+		_, err := parseEndpoint(ok)
+		require.NoError(t, err, ok)
+	}
+	for _, bad := range []string{"http://rpc.example/key-SECRET", "ftp://rpc.example", "https://", "rpc.example", "http://localhost.example", "%zz"} {
+		_, err := parseEndpoint(bad)
+		require.EqualError(t, err, "-rpc wants an https URL, or http to localhost", bad)
+	}
+
+	raw := "https://user:pw-SECRET@rpc.example/v2/key-SECRET?api-key=SECRET"
+	e, err := parseEndpoint(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "https://rpc.example", e.safe)
+	assert.Equal(t, "rpc call getBalance() on https://rpc.example: EOF", e.hide.Replace("rpc call getBalance() on "+raw+": EOF"))
+}
+
+func TestRunFollowsNoRedirect(t *testing.T) {
+	keypair := filepath.Join(t.TempDir(), "payer.json")
+	_, err := writeKeypair(keypair)
+	require.NoError(t, err)
+
+	handlers, sent := devnet(t, 2_000_000)
+	other, _ := newFakeRPC(t, handlers)
+	named := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.url, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(named.Close)
+
+	var stdout, stderr bytes.Buffer
+	assert.Equal(t, 1, run([]string{"-keypair", keypair, "-rpc", named.URL, order(t).URL()}, &stdout, &stderr))
+	assert.Empty(t, other.called(), "no call reaches the node the redirect names")
+	assert.Nil(t, sent.get())
+}
+
 func TestRunUsage(t *testing.T) {
 	url := order(t).URL()
 	tests := map[string]struct {
@@ -463,6 +498,7 @@ func TestRunUsage(t *testing.T) {
 		"new keypair and a URL":     {[]string{"-new-keypair", "k.json", url}, 2, "-new-keypair takes no URL"},
 		"new keypair and a keypair": {[]string{"-new-keypair", "k.json", "-keypair", "p.json"}, 2, "-new-keypair takes no URL"},
 		"unknown flag":              {[]string{"-amount", "1"}, 2, "flag provided but not defined"},
+		"plain http to a remote":    {[]string{"-keypair", "k.json", "-rpc", "http://rpc.example/key-SECRET", url}, 2, "-rpc wants an https URL"},
 		"bad URL":                   {[]string{"-keypair", "k.json", "solana:" + addr("merchant") + "?amount=1e3"}, 1, "payment URL: amount"},
 		"missing keypair file":      {[]string{"-keypair", filepath.Join(t.TempDir(), "none.json"), url}, 1, "devpay -new-keypair creates one"},
 	}
@@ -471,6 +507,7 @@ func TestRunUsage(t *testing.T) {
 		code := run(tt.args, &stdout, &stderr)
 		assert.Equal(t, tt.code, code, name)
 		assert.Contains(t, stderr.String(), tt.want, name)
+		assert.NotContains(t, stderr.String(), "SECRET", name)
 		assert.Empty(t, stdout.String(), name)
 	}
 }
@@ -506,4 +543,32 @@ func TestRunPays(t *testing.T) {
 	require.Equal(t, 1, run([]string{"-keypair", keypair, "-rpc", f.url, order(t).URL()}, &stdout, &stderr))
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "not on devnet")
+}
+
+func TestRunHidesTheRPCKey(t *testing.T) {
+	keypair := filepath.Join(t.TempDir(), "payer.json")
+	_, err := writeKeypair(keypair)
+	require.NoError(t, err)
+
+	// An error after a redirect would name the redirect's target.
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1:1/v2/SECRET-redirected/", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirect.Close)
+
+	// Nothing listens on port 1, so the first call fails with an error that names the URL.
+	// net/http quotes the URL in its errors, which escapes an invisible character or a quote.
+	for _, endpoint := range []string{
+		"http://user:pw-SECRET@127.0.0.1:1/key-SECRET?api-key=SECRET",
+		"http://127.0.0.1:1/?api-key=SECRET\u200b",
+		"http://127.0.0.1:1/?api-key=SECRET\"",
+		"http://u%E2%80%8Bser:pw-SECRET@127.0.0.1:1/key-SECRET",
+		redirect.URL + "/key-SECRET?api-key=SECRET",
+	} {
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"-keypair", keypair, "-rpc", endpoint, order(t).URL()}, &stdout, &stderr)
+		assert.Equal(t, 1, code, endpoint)
+		assert.Contains(t, stderr.String(), "http://127.0.0.1:", endpoint)
+		assert.NotContains(t, stderr.String(), "SECRET", endpoint)
+	}
 }
