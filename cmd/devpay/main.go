@@ -140,7 +140,8 @@ func usageError(stderr io.Writer, msg string) int {
 // endpoint is a checked -rpc URL: https, or plain http only to a loopback host. A keyed endpoint
 // carries its API key in the URL's path, query or userinfo, so devpay names it only as
 // scheme://host: the client rewrites the URL in net/http's errors, which quote it, and hide
-// replaces it in solana-go's messages, which print it as url.URL.String does.
+// replaces it in solana-go's messages, which print the URL of the request sent: net/http
+// normalizes it, dropping an empty port for example.
 type endpoint struct {
 	raw, safe string
 	hide      *strings.Replacer
@@ -152,8 +153,12 @@ func parseEndpoint(raw string) (endpoint, error) {
 	if err != nil || u.Host == "" || u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
 		return endpoint{}, errors.New("-rpc wants an https URL, or http to localhost")
 	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, raw, nil)
+	if err != nil {
+		return endpoint{}, errors.New("-rpc wants an https URL, or http to localhost")
+	}
 	safe := u.Scheme + "://" + u.Host
-	return endpoint{raw: raw, safe: safe, hide: strings.NewReplacer(raw, safe, u.String(), safe)}, nil
+	return endpoint{raw: raw, safe: safe, hide: strings.NewReplacer(raw, safe, u.String(), safe, req.URL.String(), safe)}, nil
 }
 
 func isLoopback(host string) bool {

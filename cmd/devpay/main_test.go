@@ -563,6 +563,7 @@ func TestRunHidesTheRPCKey(t *testing.T) {
 		"http://127.0.0.1:1/?api-key=SECRET\u200b",
 		"http://127.0.0.1:1/?api-key=SECRET\"",
 		"http://u%E2%80%8Bser:pw-SECRET@127.0.0.1:1/key-SECRET",
+		"http://user:pw-SECRET@127.0.0.1:/key-SECRET?api-key=SECRET", // an empty port, so port 80
 		redirect.URL + "/key-SECRET?api-key=SECRET",
 	} {
 		var stdout, stderr bytes.Buffer
