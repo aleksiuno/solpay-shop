@@ -46,7 +46,8 @@ The payment watcher is a goroutine in the same process. Each order has its own r
 32-byte address that the customer's payment lists as an extra account. On each tick the watcher
 asks the RPC node for the transactions that mention the reference of each pending, underpaid or
 recently expired order, verifies them, and records each result and its events in one database
-transaction.
+transaction. The reference is 32 random bytes, not a generated keypair: an account that never
+signs needs no private key, so the shop holds no keys at all.
 
 Payment requests are Solana Pay URLs (`solana:<merchant>?amount=…&reference=…`), which a pure
 package, `internal/solanapay`, builds and parses. The URL carries the amount in decimal SOL, and
