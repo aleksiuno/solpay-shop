@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	sol "github.com/gagliardetto/solana-go"
@@ -25,19 +26,36 @@ const (
 )
 
 // Client reads payments from a Solana JSON-RPC endpoint and is safe for concurrent use. All its
-// calls share one rate limiter.
+// calls share one rate limiter. A keyed endpoint carries its API key in the URL, so no error it
+// returns names more of the endpoint than its scheme and host.
 type Client struct {
-	rpc *rpc.Client
+	rpc  *rpc.Client
+	hide *strings.Replacer
 }
 
 // New returns a client for the endpoint. The error never repeats the URL.
 func New(endpoint string) (*Client, error) {
-	if u, err := url.Parse(endpoint); err != nil || u.Host == "" {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
 		return nil, errors.New("solana: the RPC endpoint is not a valid URL")
 	}
-	hc := &http.Client{Timeout: requestTimeout}
-	jc := jsonrpc.NewClientWithOpts(endpoint, &jsonrpc.RPCClientOpts{HTTPClient: endpointClient{hc}})
-	return &Client{rpc: rpc.NewWithCustomRPCClient(limited{jc, rate.NewLimiter(rate.Every(callEvery), 1)})}, nil
+	// solana-go prints the URL of the request it sent, which net/http normalizes (an empty port
+	// is dropped, for example), so the replacer also knows that form.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil, errors.New("solana: the RPC endpoint is not a valid URL")
+	}
+	safe := u.Scheme + "://" + u.Host
+	hc := &http.Client{
+		Timeout: requestTimeout,
+		// The devnet check vouches for this endpoint only, so a redirect must not lead elsewhere.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	jc := jsonrpc.NewClientWithOpts(endpoint, &jsonrpc.RPCClientOpts{HTTPClient: endpointClient{hc, safe}})
+	return &Client{
+		rpc:  rpc.NewWithCustomRPCClient(limited{jc, rate.NewLimiter(rate.Every(callEvery), 1)}),
+		hide: strings.NewReplacer(endpoint, safe, u.String(), safe, req.URL.String(), safe),
+	}, nil
 }
 
 // Signatures lists up to limit transactions that mention the reference, newest first, at
@@ -108,24 +126,40 @@ func (c *Client) CheckDevnet(ctx context.Context) error {
 	return nil
 }
 
-// fail classifies err. When ctx has ended, err is reported as the context's error, even if it came
-// from reading a body that the end cut short.
+// fail classifies err and hides the endpoint's URL in its message. When ctx has ended, err is
+// reported as the context's error, even if it came from reading a body that the end cut short.
 func (c *Client) fail(ctx context.Context, err error) error {
 	if ce := ctx.Err(); ce != nil && !errors.Is(err, ce) {
 		err = fmt.Errorf("%w: %w", ce, err)
 	}
-	return classify(err)
+	err = classify(err)
+	return &hiddenURL{msg: c.hide.Replace(err.Error()), err: err}
 }
 
-// endpointClient is the *http.Client under solana-go. It turns every HTTP 429 into a
-// *jsonrpc.HTTPError: when the body is a JSON-RPC error, solana-go returns that error and drops
-// the status, and providers mark rate limiting with codes of their own.
+// hiddenURL is an error whose message no longer contains the endpoint's URL. It unwraps to the
+// original error.
+type hiddenURL struct {
+	msg string
+	err error
+}
+
+func (e *hiddenURL) Error() string { return e.msg }
+func (e *hiddenURL) Unwrap() error { return e.err }
+
+// endpointClient is the *http.Client under solana-go. Its errors give the endpoint as safe:
+// net/http quotes the URL in its errors, so a replacer could miss it. It also turns every HTTP
+// 429 into a *jsonrpc.HTTPError: when the body is a JSON-RPC error, solana-go returns that error
+// and drops the status, and providers mark rate limiting with codes of their own.
 type endpointClient struct {
 	*http.Client
+	safe string
 }
 
 func (c endpointClient) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.Client.Do(req) //nolint:gosec // G704: the URL is the configured RPC endpoint
+	if ue, ok := errors.AsType[*url.Error](err); ok {
+		ue.URL = c.safe
+	}
 	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // lets the connection be reused
 		_ = resp.Body.Close()
