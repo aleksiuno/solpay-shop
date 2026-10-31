@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -174,7 +175,7 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 
 	balance, err := client.GetBalance(ctx, payer, rpc.CommitmentConfirmed)
 	if err != nil {
-		return sol.Signature{}, fmt.Errorf("get the payer's balance: %w", err)
+		return sol.Signature{}, fmt.Errorf("get the payer's balance: %w", readable(err))
 	}
 	if have := balance.Value; have <= math.MaxInt64 && int64(have) < req.Lamports {
 		return sol.Signature{}, fmt.Errorf("the payer %s holds %s SOL, and the payment needs %s SOL plus a small fee: get devnet SOL at %s",
@@ -183,7 +184,7 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 
 	latest, err := client.GetLatestBlockhash(ctx, rpc.CommitmentConfirmed)
 	if err != nil {
-		return sol.Signature{}, fmt.Errorf("get a recent blockhash: %w", err)
+		return sol.Signature{}, fmt.Errorf("get a recent blockhash: %w", readable(err))
 	}
 	tx, err := sol.NewTransaction([]sol.Instruction{inst}, latest.Value.Blockhash, sol.TransactionPayer(payer))
 	if err != nil {
@@ -205,7 +206,7 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 		money.FormatSOL(req.Lamports), payer, req.Recipient, sig)
 	if _, err := client.SendTransactionWithOpts(ctx, tx, rpc.TransactionOpts{PreflightCommitment: rpc.CommitmentConfirmed}); err != nil {
 		if _, refused := errors.AsType[*jsonrpc.RPCError](err); refused {
-			return sol.Signature{}, fmt.Errorf("send the transaction: %w", err) // the node refused it: nothing was sent
+			return sol.Signature{}, fmt.Errorf("send the transaction: %w", readable(err)) // the node refused it: nothing was sent
 		}
 		return sol.Signature{}, fmt.Errorf("send the transaction: %w; the node may have received it, so look the transaction up before paying again", err)
 	}
@@ -250,7 +251,7 @@ func transfer(req solanapay.Request, payer sol.PublicKey) (sol.Instruction, erro
 func checkDevnet(ctx context.Context, client *rpc.Client) error {
 	hash, err := client.GetGenesisHash(ctx)
 	if err != nil {
-		return fmt.Errorf("get the cluster's genesis hash: %w", err)
+		return fmt.Errorf("get the cluster's genesis hash: %w", readable(err))
 	}
 	if hash.String() != solana.DevnetGenesisHash {
 		return fmt.Errorf("the RPC node is not on devnet (genesis hash %s), and devpay pays on devnet only", hash)
@@ -269,7 +270,7 @@ func confirm(ctx context.Context, client *rpc.Client, sig sol.Signature, lastVal
 		switch {
 		case err != nil:
 			if ctx.Err() == nil {
-				fmt.Fprintf(log, "Status check failed, retrying: %v\n", err)
+				fmt.Fprintf(log, "Status check failed, retrying: %v\n", readable(err))
 			}
 		case st == nil: // not seen by the node yet
 			if expired {
@@ -304,4 +305,31 @@ func status(ctx context.Context, client *rpc.Client, sig sol.Signature) (*rpc.Si
 		return nil, fmt.Errorf("getSignatureStatuses returned %d statuses for one signature", len(out.Value))
 	}
 	return out.Value[0], nil
+}
+
+// rpcError shows a JSON-RPC error from the node on one line, followed by the program logs that a
+// failed preflight simulation returns. solana-go's own Error prints a multi-line struct dump.
+type rpcError struct{ err *jsonrpc.RPCError }
+
+func (e rpcError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "RPC error %d: %s", e.err.Code, e.err.Message)
+	if data, ok := e.err.Data.(map[string]any); ok {
+		if logs, ok := data["logs"].([]any); ok {
+			for _, line := range logs {
+				fmt.Fprintf(&b, "\n  %v", line)
+			}
+		}
+	}
+	return b.String()
+}
+
+func (e rpcError) Unwrap() error { return e.err }
+
+// readable returns err with a JSON-RPC error in its chain replaced by an rpcError, or err itself.
+func readable(err error) error {
+	if re, ok := errors.AsType[*jsonrpc.RPCError](err); ok {
+		return rpcError{re}
+	}
+	return err
 }

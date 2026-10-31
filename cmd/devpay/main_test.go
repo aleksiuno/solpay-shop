@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	sol "github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -318,6 +320,27 @@ func TestPayRefusesTooSmallBalance(t *testing.T) {
 	require.ErrorContains(t, err, "holds 0.000999999 SOL, and the payment needs 0.001 SOL")
 	require.ErrorContains(t, err, faucetURL)
 	assert.Equal(t, []string{"getGenesisHash", "getBalance"}, f.called())
+}
+
+func TestPayShowsRPCErrorsOnOneLine(t *testing.T) {
+	handlers, _ := devnet(t, 2_000_000)
+	handlers["sendTransaction"] = func([]json.RawMessage) any {
+		return failure{
+			Code:    -32002,
+			Message: "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1",
+			Data: map[string]any{"err": map[string]any{"InstructionError": []any{0, map[string]any{"Custom": 1}}},
+				"logs": []string{"Program 11111111111111111111111111111111 invoke [1]", "Transfer: insufficient lamports 0, need 1000000"}},
+		}
+	}
+	_, client := newFakeRPC(t, handlers)
+
+	_, err := pay(t.Context(), client, testKey("payer"), order(t), io.Discard)
+	require.EqualError(t, err, "send the transaction: RPC error -32002: "+
+		"Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1\n"+
+		"  Program 11111111111111111111111111111111 invoke [1]\n"+
+		"  Transfer: insufficient lamports 0, need 1000000")
+	_, ok := errors.AsType[*jsonrpc.RPCError](err)
+	assert.True(t, ok, "the RPC error is still in the chain")
 }
 
 func TestPayChecksTheRequestFirst(t *testing.T) {
