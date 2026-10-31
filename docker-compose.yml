@@ -1,0 +1,82 @@
+name: solpay-shop
+
+# Every secret comes from .env (make env creates it); a missing one stops compose before it starts
+# anything. Host ports are published on loopback only.
+
+x-app: &app
+  build:
+    context: .
+    args:
+      VERSION: ${VERSION:-dev}      # make up passes git describe
+  image: solpay-shop:dev            # one image for migrate and app
+  environment:
+    APP_ADDR: ":8080"
+    DATABASE_URL: postgres://solpay:${POSTGRES_PASSWORD:?not set, run make env}@db:5432/solpay?sslmode=disable
+    SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
+    MERCHANT_ADDRESS: ${MERCHANT_ADDRESS:?not set, run make env and put a devnet wallet address in .env}
+    ORDER_TTL: ${ORDER_TTL:-15m}
+    POLL_INTERVAL: ${POLL_INTERVAL:-5s}
+    ADMIN_USER: ${ADMIN_USER:?not set, run make env}
+    ADMIN_PASS: ${ADMIN_PASS:?not set, run make env}
+    DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?not set, run make env}
+    FILES_DIR: /files
+  volumes:
+    - ./testdata/files:/files:ro
+  # The static binary writes nothing to its filesystem and needs no Linux capabilities.
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: solpay
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?not set, run make env}
+      POSTGRES_DB: solpay
+    ports: ["127.0.0.1:${DB_PORT:-5432}:5432"]   # for make run and make migrate on the host
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      # TCP, not the socket: on first start the entrypoint's init server listens on the socket
+      # only, so a socket check can pass before the real server accepts connections.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: applies the schema before the seed and the app start. The server validates its whole
+  # configuration even with -migrate-only, so migrate gets the same environment as the app.
+  migrate:
+    <<: *app
+    command: ["-migrate-only"]
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  # One-shot: psql from the Postgres image loads the demo products, logging in like the app.
+  seed:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?not set, run make env}
+    volumes: ["./scripts/seed.sql:/seed.sql:ro"]
+    command: ["psql", "-h", "db", "-U", "solpay", "-d", "solpay", "-v", "ON_ERROR_STOP=1", "-f", "/seed.sql"]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  # No healthcheck: distroless has no shell or curl; use curl localhost:8080/healthz instead.
+  app:
+    <<: *app
+    ports: ["127.0.0.1:${APP_PORT:-8080}:8080"]
+    stop_grace_period: 10s          # the server's 8 s shutdown budget fits inside it
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      seed: { condition: service_completed_successfully }   # a failed seed fails up, not an empty shop
+
+volumes:
+  pgdata: {}
