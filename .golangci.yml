@@ -1,0 +1,24 @@
+version: "2"
+run:
+  timeout: 5m
+  build-tags: [integration]
+linters:
+  default: standard        # errcheck, govet, ineffassign, staticcheck, unused
+  enable: [bodyclose, errorlint, exhaustive, gosec, misspell, modernize, nilerr, noctx,
+           nolintlint, sloglint, testifylint, unconvert, usestdlibvars, usetesting]
+  settings:
+    errcheck: { check-type-assertions: true }
+    exhaustive: { default-signifies-exhaustive: false }   # a new Status must break every switch
+    govet: { enable-all: true, disable: [fieldalignment, shadow] }
+    nolintlint: { require-explanation: true, require-specific: true }
+    sloglint: { no-mixed-args: true, key-naming-case: snake, context: scope }
+  exclusions:
+    generated: strict
+    presets: [comments, std-error-handling, common-false-positives]
+    rules:
+      - path: _test\.go
+        linters: [gosec, noctx]
+formatters:
+  enable: [gofmt, goimports]
+  settings:
+    goimports: { local-prefixes: [github.com/aleksiuno/solpay-shop] }
