@@ -1,6 +1,6 @@
-// Package audit holds the payment event log's model: what an event is, its kinds and their levels.
-// It imports no other package of the shop, so every package that emits events can import it
-// without importing the others.
+// Package audit holds the payment event log: what an event is, its kinds and their levels, and the
+// Recorder that saves events and logs them. It imports no other package of the shop, so every
+// package that emits events can import it without importing the others.
 package audit
 
 import (
