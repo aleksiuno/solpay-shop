@@ -1,10 +1,11 @@
 .DEFAULT_GOAL := help
 GOLANGCI_VERSION := v2.15.0
+SQLC_VERSION := 1.31.1
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LINT := $(shell command -v golangci-lint 2>/dev/null || echo docker run --rm -v $(CURDIR):/app -w /app golangci/golangci-lint:$(GOLANGCI_VERSION) golangci-lint)
 LOAD_ENV := set -a; [ -f .env ] || { echo "missing .env: run make env" >&2; exit 1; }; . ./.env; set +a
 
-.PHONY: help env up down logs run migrate seed test test-integration lint fmt tidy
+.PHONY: help env up down logs run migrate seed test test-integration lint fmt sqlc tidy
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -58,6 +59,9 @@ lint: ## Run golangci-lint (local binary, or the pinned Docker image)
 
 fmt: ## Format the code with golangci-lint's formatters
 	$(LINT) fmt
+
+sqlc: ## Regenerate internal/db/sqlcdb from the queries and migrations (with Docker)
+	docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src sqlc/sqlc:$(SQLC_VERSION) generate
 
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
