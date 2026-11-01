@@ -30,6 +30,9 @@ type Order struct {
 	PaidAt      *time.Time
 	FulfilledAt *time.Time
 	RefundedAt  *time.Time
+	// HasLatePayment is true once a valid payment for the order has arrived after the deadline. The
+	// store reads it from the payment ledger with the order; it is never stored on the order.
+	HasLatePayment bool
 }
 
 // RemainingLamports returns how much is still to be paid: the amount less what was received, or

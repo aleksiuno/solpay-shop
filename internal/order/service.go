@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 	"uuid"
 
 	"github.com/aleksiuno/solpay-shop/internal/audit"
@@ -16,12 +18,18 @@ var (
 	ErrNotFound = errors.New("order: not found")
 	// ErrProductInactive: the product exists but is not for sale.
 	ErrProductInactive = errors.New("order: product is not for sale")
+	// ErrNoLatePayment: an expired order received nothing, so there is nothing to refund. It wraps
+	// ErrInvalidTransition.
+	ErrNoLatePayment = fmt.Errorf("%w: an expired order can be refunded only after a late payment", ErrInvalidTransition)
+	// ErrStaleState: the order's status changed between reading it and storing the change.
+	ErrStaleState = errors.New("order: status changed meanwhile")
 )
 
-// The quantities an order may have.
+// The limits that Create and Refund check.
 const (
-	MinQuantity = 1
-	MaxQuantity = 10
+	MinQuantity   = 1
+	MaxQuantity   = 10
+	MaxNoteLength = 500 // in characters
 )
 
 // ValidationError says which input is not acceptable, and why. Field is the input's name in
@@ -47,6 +55,11 @@ type Repository interface {
 	Get(ctx context.Context, id uuid.UUID) (Order, error) // ErrNotFound
 	// List returns the newest orders that match f, newest first.
 	List(ctx context.Context, f ListFilter) ([]Order, error)
+	// Refund locks the order with id and passes check the order as it is under the lock, late
+	// payments included. If check returns no error, Refund stores the order as refunded at the time
+	// at, with the events check returns, in one transaction, and returns the stored order. An error
+	// from check rolls everything back and is returned as it is. ErrNotFound, ErrStaleState.
+	Refund(ctx context.Context, id uuid.UUID, at time.Time, check func(Order) ([]audit.Event, error)) (Order, error)
 }
 
 // ProductGetter finds a product by its slug, or returns product.ErrNotFound.
@@ -54,7 +67,7 @@ type ProductGetter interface {
 	GetBySlug(ctx context.Context, slug string) (product.Product, error)
 }
 
-// Service creates orders, and gets and lists them.
+// Service creates orders, gets and lists them, and refunds them.
 type Service struct {
 	repo     Repository
 	products ProductGetter
@@ -127,4 +140,36 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (Order, error) {
 // List returns the newest orders that match f, newest first.
 func (s *Service) List(ctx context.Context, f ListFilter) ([]Order, error) {
 	return s.repo.List(ctx, f)
+}
+
+// Refund marks the order with id refunded, with an optional note from the admin, and records an
+// order.refunded event with it. The SOL itself is returned outside the shop.
+//
+// An order can be refunded once it has received something: when it is underpaid, paid or
+// fulfilled, or expired with a late payment. Any other order gives an error wrapping
+// ErrInvalidTransition, an expired order without a late payment gives ErrNoLatePayment, and an
+// unknown id gives ErrNotFound. The note is trimmed of surrounding white space first; a note that
+// is then longer than 500 characters, or has a NUL or a byte that is not UTF-8, gives a
+// *ValidationError.
+func (s *Service) Refund(ctx context.Context, id uuid.UUID, note string) (Order, error) {
+	note = strings.TrimSpace(note)
+	if !utf8.ValidString(note) || strings.ContainsRune(note, 0) {
+		return Order{}, &ValidationError{"note", "must be valid UTF-8 text without NUL characters"}
+	}
+	if utf8.RuneCountInString(note) > MaxNoteLength {
+		return Order{}, &ValidationError{"note", fmt.Sprintf("is longer than %d characters", MaxNoteLength)}
+	}
+	return s.repo.Refund(ctx, id, s.now(), func(o Order) ([]audit.Event, error) {
+		if o.Status == Expired && !o.HasLatePayment {
+			return nil, ErrNoLatePayment
+		}
+		if err := Transition(o.Status, Refunded); err != nil {
+			return nil, err
+		}
+		data := map[string]any{"from_status": string(o.Status), "received_lamports": o.ReceivedLamports}
+		if note != "" {
+			data["note"] = note
+		}
+		return []audit.Event{{OrderID: &o.ID, Kind: audit.OrderRefunded, Message: "order refunded", Data: data}}, nil
+	})
 }

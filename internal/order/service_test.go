@@ -62,6 +62,22 @@ func (r *repo) List(_ context.Context, f order.ListFilter) ([]order.Order, error
 	return out, nil
 }
 
+func (r *repo) Refund(_ context.Context, id uuid.UUID, at time.Time, check func(order.Order) ([]audit.Event, error)) (order.Order, error) {
+	r.calls++
+	stored, ok := r.orders[id]
+	if !ok {
+		return order.Order{}, order.ErrNotFound
+	}
+	evs, err := check(stored)
+	if err != nil {
+		return order.Order{}, err
+	}
+	stored.Status, stored.RefundedAt = order.Refunded, &at
+	r.orders[id] = stored
+	r.events = append(r.events, evs...)
+	return stored, nil
+}
+
 // products finds products by slug.
 type products map[string]product.Product
 
@@ -184,6 +200,93 @@ func placed(s order.Status) order.Order {
 		ReceivedLamports: received, Reference: "ref", Status: s,
 		ExpiresAt: now.Add(-time.Hour), CreatedAt: now.Add(-2 * time.Hour),
 	}
+}
+
+func TestRefund(t *testing.T) {
+	for _, s := range []order.Status{order.Underpaid, order.Paid, order.Fulfilled} {
+		o := placed(s)
+		r := newRepo(o)
+		got, err := newService(r).Refund(t.Context(), o.ID, "  sent back by hand\n")
+		require.NoError(t, err, s)
+		assert.Equal(t, order.Refunded, got.Status)
+		require.NotNil(t, got.RefundedAt)
+		assert.Equal(t, now, *got.RefundedAt)
+
+		require.Len(t, r.events, 1)
+		ev := r.events[0]
+		assert.Equal(t, audit.OrderRefunded, ev.Kind)
+		assert.Equal(t, o.ID, *ev.OrderID)
+		assert.Equal(t, map[string]any{
+			"from_status":       string(s),
+			"received_lamports": int64(3000),
+			"note":              "sent back by hand",
+		}, ev.Data, "the note is trimmed")
+	}
+}
+
+func TestRefundWithoutANote(t *testing.T) {
+	o := placed(order.Paid)
+	r := newRepo(o)
+	_, err := newService(r).Refund(t.Context(), o.ID, " ")
+	require.NoError(t, err)
+	require.Len(t, r.events, 1)
+	assert.NotContains(t, r.events[0].Data, "note")
+}
+
+func TestRefundAnExpiredOrder(t *testing.T) {
+	o := placed(order.Expired)
+	r := newRepo(o)
+	_, err := newService(r).Refund(t.Context(), o.ID, "")
+	require.ErrorIs(t, err, order.ErrNoLatePayment)
+	require.ErrorIs(t, err, order.ErrInvalidTransition, "so a caller can treat both as an invalid transition")
+	assert.Equal(t, order.Expired, r.orders[o.ID].Status)
+	assert.Empty(t, r.events)
+
+	o.HasLatePayment = true
+	r = newRepo(o)
+	got, err := newService(r).Refund(t.Context(), o.ID, "")
+	require.NoError(t, err, "a late payment makes an expired order refundable")
+	assert.Equal(t, order.Refunded, got.Status)
+	assert.Equal(t, map[string]any{"from_status": "expired", "received_lamports": int64(0)}, r.events[0].Data,
+		"a late payment is recorded, not credited")
+}
+
+func TestRefundRefusesOrdersThatReceivedNothingOrAreRefunded(t *testing.T) {
+	for _, s := range []order.Status{order.Pending, order.Refunded} {
+		o := placed(s)
+		r := newRepo(o)
+		_, err := newService(r).Refund(t.Context(), o.ID, "")
+		require.ErrorIs(t, err, order.ErrInvalidTransition, s)
+		require.NotErrorIs(t, err, order.ErrNoLatePayment, s)
+		assert.Equal(t, s, r.orders[o.ID].Status)
+		assert.Nil(t, r.orders[o.ID].RefundedAt)
+		assert.Empty(t, r.events)
+	}
+}
+
+func TestRefundNote(t *testing.T) {
+	o := placed(order.Paid)
+	_, err := newService(newRepo(o)).Refund(t.Context(), o.ID, strings.Repeat("ž", 500))
+	require.NoError(t, err, "500 characters")
+
+	for note, reason := range map[string]string{
+		strings.Repeat("ž", 501): "is longer than 500 characters",
+		"a\x00b":                 "must be valid UTF-8 text without NUL characters",
+		"a\xffb":                 "must be valid UTF-8 text without NUL characters",
+	} {
+		r := newRepo(o)
+		_, err := newService(r).Refund(t.Context(), o.ID, note)
+		var ve *order.ValidationError
+		require.ErrorAs(t, err, &ve)
+		assert.Equal(t, "note", ve.Field)
+		assert.Equal(t, reason, ve.Reason)
+		assert.Zero(t, r.calls, "the order is not touched")
+	}
+}
+
+func TestRefundAnUnknownOrder(t *testing.T) {
+	_, err := newService(newRepo()).Refund(t.Context(), uuid.NewV4(), "")
+	require.ErrorIs(t, err, order.ErrNotFound)
 }
 
 func TestGetAndList(t *testing.T) {
