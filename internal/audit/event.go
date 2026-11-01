@@ -23,3 +23,11 @@ type Event struct {
 	Data      map[string]any
 	CreatedAt time.Time // set by the database
 }
+
+// ListFilter selects the events to list. Each field that is set narrows the list, and the zero
+// ListFilter matches every event.
+type ListFilter struct {
+	OrderID *uuid.UUID // only this order's events
+	Level   Level      // only events at this level
+	Before  int64      // only events with a smaller id: the last id of the previous page
+}
