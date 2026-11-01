@@ -1,4 +1,5 @@
-// Package product holds the catalogue: what a product is and the rules it must meet.
+// Package product holds the catalogue: what a product is, the rules it must meet, and the service
+// that lists, creates and updates products.
 package product
 
 import (
@@ -58,7 +59,7 @@ func (e *ValidationError) Error() string {
 }
 
 // Validate checks p's fields in order and returns a *ValidationError for the first one that breaks
-// a rule. It does not check that the file exists.
+// a rule. It does not check that the file exists; the Service does that.
 func (p Product) Validate() error {
 	switch {
 	case p.Slug == "":
