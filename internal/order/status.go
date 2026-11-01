@@ -1,5 +1,6 @@
-// Package order holds the order model: its statuses, the moves between them and the rule for
-// crediting a payment. It has no storage or network code.
+// Package order holds orders: their statuses and the moves between them, the rule for crediting a
+// payment, and the service that creates, gets and lists orders. It has no storage or network code;
+// the service reaches the store through the Repository interface.
 package order
 
 // Status is where an order is in its life. Transition lists the moves between statuses.
