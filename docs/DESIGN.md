@@ -162,6 +162,32 @@ lamports throughout; SOL appears only in pages and in the payment URL.
 Alternative considered: a single `paid_signature` column on `orders`. It cannot represent a top-up,
 where one order is paid by several transactions.
 
+## Transactions
+
+Every change to an order is one database transaction that also saves the events it causes, and
+the code for these transactions lives in `internal/db`. The services decide what should happen;
+the store makes it atomic.
+
+- Placing an order inserts the order and its `order.created` event.
+- A refund locks the order's row (`SELECT … FOR UPDATE`) and then reads the order in a second
+  statement, which lets the order service check the status and whether a late payment arrived.
+  It then moves the order to refunded with `UPDATE … WHERE id = $1 AND status = $2`, which must
+  change exactly one row, and inserts the `order.refunded` event.
+- Applying a payment, expiring an order and marking it fulfilled follow the same pattern. The
+  status change passes `order.Transition`, the UPDATE names the old status, and the events, plus
+  the ledger row for a payment, go in the same transaction. Applying a payment locks the row too,
+  because it reads the order before it decides; expiry and fulfilment rely on the conditional
+  UPDATE alone.
+
+If any step fails, the whole transaction rolls back, and its events are logged only after a
+commit. Transactions run at Postgres's default level, READ COMMITTED: the row lock and the
+conditional UPDATE are what keep two writers from moving the same order twice.
+
+At READ COMMITTED each statement sees the data as it was when that statement began. That is why a
+refund reads the order in a statement after the lock: a locking read that had to wait would return
+the newest version of the order's row, but would still miss a late payment that the transaction
+holding the lock recorded meanwhile.
+
 ## Out of scope
 
 Deliberately not built: user accounts, carts with several products, taxes and shipping, mainnet,
