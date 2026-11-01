@@ -1,5 +1,6 @@
 // Package db holds the Postgres code. Migrate applies the embedded schema migrations, Open connects,
-// Events saves and lists the payment event log, and Products stores the catalogue.
+// Events saves and lists the payment event log, Products stores the catalogue, and Orders stores
+// orders.
 package db
 
 import (
