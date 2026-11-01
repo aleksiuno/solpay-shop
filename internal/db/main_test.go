@@ -9,14 +9,19 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/aleksiuno/solpay-shop/internal/db"
 )
 
-// dsn is the URL of the package's Postgres container, which TestMain has already migrated.
-var dsn string
+var (
+	// dsn is the URL of the package's Postgres container, which TestMain has already migrated.
+	dsn string
+	// pool is connected to that database.
+	pool *pgxpool.Pool
+)
 
 // TestMain starts one Postgres container for the package. With the integration tag set and no
 // Docker daemon, the tests fail instead of skipping, so CI cannot pass without running them.
@@ -49,5 +54,10 @@ func runTests(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, "migrate:", err)
 		return 1
 	}
+	if pool, err = db.Open(ctx, dsn); err != nil {
+		fmt.Fprintln(os.Stderr, "open pool:", err)
+		return 1
+	}
+	defer pool.Close()
 	return m.Run()
 }
