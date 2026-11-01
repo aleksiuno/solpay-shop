@@ -25,6 +25,11 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
+      - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5.0.0
+        with:
+          sqlc-version: "1.31.1"
+      - name: sqlc diff
+        run: sqlc diff
       - name: go test (race, integration)
         run: go test -race -tags=integration -count=1 ./...
       - name: govulncheck
