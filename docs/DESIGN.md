@@ -88,10 +88,47 @@ demo seed always finds the schema; the app's own check then finds nothing to app
   expired -------------------------------+
 ```
 
-An overpayment counts as paid in full and is logged as a warning. Only payments made by the deadline
-count towards the amount: a top-up that is still short leaves the order underpaid, and a payment
-after the deadline is recorded as late without changing the status. A refund is marked by an admin;
-the SOL itself is returned outside the shop.
+| From | To | When | By |
+|---|---|---|---|
+| pending | paid | an on-time payment brings the total to the amount or more | watcher |
+| pending | underpaid | an on-time payment leaves the total short of the amount | watcher |
+| pending | expired | nothing was paid by the deadline | watcher |
+| underpaid | paid | an on-time top-up brings the total to the amount or more | watcher |
+| paid | fulfilled | the first authorised download | customer |
+| underpaid, paid, fulfilled | refunded | an admin marks the order refunded | admin |
+| expired | refunded | the same, but only if a payment arrived after the deadline | admin |
+
+A payment is on time if its block time is not after the deadline, and only on-time payments count
+towards the amount. An overpayment counts as paid in full and is logged as a warning. A top-up that
+is still short leaves the order underpaid, and a payment after the deadline is recorded as late
+without changing the status. A refund is marked by an admin; the SOL itself is returned outside the
+shop.
+
+Three of the moves handle money that does not fit the simple path:
+
+- underpaid → paid: a customer who sent too little can send the rest, with the same reference,
+  before the deadline.
+- fulfilled → refunded: a download does not settle the order for good, so an admin can still
+  refund it.
+- expired → refunded: a payment that arrives after the deadline is recorded but not credited, so
+  the order stays expired and the customer is owed that SOL. The refund closes the order. An
+  expired order without a late payment received nothing, so it cannot be refunded.
+
+An underpaid order never expires, because it holds the customer's SOL: it stays underpaid until a
+top-up pays it or an admin refunds it. A pending order expires late on purpose. The watcher expires
+it no sooner than two minutes after the deadline, and only right after a poll of its reference that
+succeeded. A transaction that the RPC node lists for the reference but cannot return yet also holds
+the expiry back, for up to an hour after the deadline; after that the order expires, and its event
+names the transactions that never resolved. An RPC outage or a slow index therefore delays the
+expiry, instead of expiring an order that was paid on time.
+
+Every other move is refused, a move to the same status included: for example expired → paid (a late
+payment never pays an order), pending → refunded (nothing was received) or any move out of
+refunded. `order.Transition` is the one place that lists the moves, and every status change passes
+it first. The statement that stores a change is also conditional on the old status
+(`UPDATE … WHERE id = $1 AND status = $2`) and must change exactly one row, so two writers that
+read the same order cannot both move it. The schema checks only that the status is one of the six
+values; it does not encode the moves a second time.
 
 ## Data model
 
