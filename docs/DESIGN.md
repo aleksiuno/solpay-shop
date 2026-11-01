@@ -58,6 +58,16 @@ recently expired order, verifies them, and records each result and its events in
 transaction. The reference is 32 random bytes, not a generated keypair: an account that never
 signs needs no private key, so the shop holds no keys at all.
 
+The event log has a package of its own, `internal/audit`, which imports no other package of the
+shop. The order, payment and download code all emit events. Most arise in payment, but the event
+types cannot live there: order would have to import payment, which already imports order. In order,
+they would put the watcher's RPC errors in a package that has nothing to do with RPC. Code that
+changes an order in a database transaction saves its events in the same transaction and logs them
+only after the commit, so the log never shows a change that rolled back. Events outside any
+transaction, such as an RPC error, are saved and logged at once, and logged even if saving fails.
+An outbox table that a separate process publishes from would also keep the log and the database in
+step, but nothing here consumes events, so saving them in the order's own transaction is enough.
+
 Payment requests are Solana Pay URLs (`solana:<merchant>?amount=…&reference=…`), which a pure
 package, `internal/solanapay`, builds and parses. The URL carries the amount in decimal SOL, and
 `internal/money` converts between lamports and SOL with integer arithmetic only, because a float64
