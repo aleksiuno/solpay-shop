@@ -11,7 +11,11 @@ import (
 type Order struct {
 	ID        uuid.UUID
 	ProductID uuid.UUID
-	Quantity  int
+	// ProductSlug and ProductTitle name the product. Only ProductID is stored with the order; the
+	// store reads these two with it.
+	ProductSlug  string
+	ProductTitle string
+	Quantity     int
 	// AmountLamports is the price times the quantity when the order was made. A later price
 	// change does not alter it.
 	AmountLamports int64
