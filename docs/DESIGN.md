@@ -149,6 +149,31 @@ it first. The statement that stores a change is also conditional on the old stat
 read the same order cannot both move it. The schema checks only that the status is one of the six
 values; it does not encode the moves a second time.
 
+## Payment detection
+
+An order's payments are found through its reference, and `payment.Verify` then works out how much
+each transaction pays towards that order. It is a pure function of the transaction, the merchant
+address and the reference, so its rules are tested on recorded devnet payments and hand-built
+transactions, with no RPC node involved.
+
+A transaction pays an order the sum of its top-level System Program transfers to the merchant that
+list the order's reference among their extra accounts, which is where Solana Pay wallets and devpay
+put it. Other instructions are ignored wherever they sit, so a wallet may add a compute budget or a
+memo, and the transfer need not come last. A transfer to the merchant without the reference does
+not count, even in a transaction that pays the order. Legacy, v0 and v1 transactions verify the
+same way, and keys that a v0 transaction loads from an address lookup table count like any other.
+
+The sum is then checked against the merchant's balance, which must have grown by at least as much.
+That catches a transaction whose payer is the merchant, where the transfer moves nothing and the
+balance falls by the fee, and it guards against a transaction that was misread. A transaction that
+pays nothing gets a reason, which the payment ledger keeps with it: it failed on chain, no transfer
+matched, its transfers claimed more than the balance gained, or it could not be read.
+
+Alternative considered: crediting the merchant's balance change alone. It needs no instruction
+decoding, but it would credit the order with everything the merchant received in the transaction,
+a transfer for another order or one without the reference included, and nothing would tie the
+money to the transfer that lists the reference.
+
 ## Data model
 
 Four tables. `products` holds the catalogue. `orders` holds each order's state: the amount is a
