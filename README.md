@@ -32,12 +32,12 @@ Compose starts Postgres, applies the migrations, loads two demo products and sta
 
 ## Paying on devnet
 
-Each order will ask for payment with a Solana Pay URL,
-`solana:<MERCHANT>?amount=<SOL>&reference=<REF>`, and the shop will find the payment by its
-reference alone: the wallet must attach the reference to the transfer as an extra account, so a
-plain Send to the merchant address, or `solana transfer`, will not be detected. devpay, a small
-command in this repository, pays such a URL on devnet with the reference attached. Until the order
-API exists, any address works as `<REF>`, for example one printed by `devpay -new-keypair`.
+Each order asks for payment with a Solana Pay URL,
+`solana:<MERCHANT>?amount=<SOL>&reference=<REF>`, which `POST /api/v1/orders` returns
+([docs/API.md](docs/API.md)), and the shop will find the payment by its reference alone: the wallet
+must attach the reference to the transfer as an extra account, so a plain Send to the merchant
+address, or `solana transfer`, will not be detected. devpay, a small command in this repository,
+pays such a URL on devnet with the reference attached.
 
 ```sh
 go run ./cmd/devpay -new-keypair data/payer.json   # prints the payer's address
