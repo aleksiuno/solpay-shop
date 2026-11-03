@@ -7,13 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
 // Codes of the JSON error envelope. Clients may rely on them: a code never changes its meaning.
 const (
+	codeInvalidRequest   = "invalid_request"
+	codeValidationFailed = "validation_failed"
 	codeNotFound         = "not_found"
 	codeMethodNotAllowed = "method_not_allowed"
+	codeProductInactive  = "product_inactive"
 	codeUnauthorized     = "unauthorized"
 	codeForbidden        = "forbidden"
 	codeInternal         = "internal"
@@ -48,9 +52,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // fail answers err, which a service returned, with the envelope that fits it. An error it does not
 // know is a 500 internal envelope, and is logged instead of sent.
 func (a api) fail(w http.ResponseWriter, r *http.Request, err error) {
+	var invalid *order.ValidationError
 	switch {
+	case errors.As(err, &invalid):
+		writeError(w, http.StatusUnprocessableEntity, codeValidationFailed, invalid.Field+" "+invalid.Reason)
 	case errors.Is(err, product.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, "no such product")
+	case errors.Is(err, order.ErrNotFound):
+		writeError(w, http.StatusNotFound, codeNotFound, "no such order")
+	case errors.Is(err, order.ErrProductInactive):
+		writeError(w, http.StatusConflict, codeProductInactive, "the product is not for sale")
 	case r.Context().Err() != nil:
 		// The client hung up, or the server is stopping: nothing went wrong in the shop, and no one
 		// reads the answer.
