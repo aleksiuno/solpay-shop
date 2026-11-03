@@ -15,11 +15,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aleksiuno/solpay-shop/internal/audit"
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/db"
 	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
+	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
+	"github.com/aleksiuno/solpay-shop/internal/solana"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -102,6 +105,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	}
 	defer files.Close()
 	products := product.NewService(db.NewProducts(pool), files)
+	events := audit.NewRecorder(db.NewEvents(pool), logger)
+	orders := order.NewService(db.NewOrders(pool, events), products, cfg.OrderTTL, solana.NewReference, now)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
@@ -114,8 +119,11 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	reqCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelRequests()
 
+	api := httpapi.Deps{
+		DB: pool, Products: products, Orders: orders, Merchant: cfg.MerchantAddress, Now: now, Log: logger,
+	}
 	srv := &http.Server{
-		Handler:           routes(cfg, logger, httpapi.Deps{DB: pool, Products: products, Log: logger}),
+		Handler:           routes(cfg, logger, api),
 		BaseContext:       func(net.Listener) context.Context { return reqCtx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -147,6 +155,16 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	}
 	logger.InfoContext(ctx, "server stopped")
 	return nil
+}
+
+// now returns the time in UTC, truncated to the microseconds that Postgres stores, so the times an
+// order is created with are the ones a later read gives back.
+func now() time.Time {
+	return utcMicros(time.Now())
+}
+
+func utcMicros(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Microsecond)
 }
 
 // newLogger returns a JSON logger that writes to stdout and, when path is set, also appends to
