@@ -28,16 +28,18 @@ func (p *pinger) Ping(ctx context.Context) error {
 	return p.err
 }
 
-func newMux(db httpapi.Pinger) (*http.ServeMux, *bytes.Buffer) {
+// newAPI returns a mux with the public routes over d, logging to the returned buffer.
+func newAPI(d httpapi.Deps) (*http.ServeMux, *bytes.Buffer) {
 	log, buf := newLogger()
+	d.Log = log
 	mux := http.NewServeMux()
-	httpapi.Register(mux, httpapi.Deps{DB: db, Log: log})
+	httpapi.Register(mux, d)
 	return mux, buf
 }
 
 func TestHealthWhenTheDatabaseAnswers(t *testing.T) {
 	db := &pinger{}
-	mux, buf := newMux(db)
+	mux, buf := newAPI(httpapi.Deps{DB: db})
 	w := serve(mux, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -50,7 +52,7 @@ func TestHealthWhenTheDatabaseAnswers(t *testing.T) {
 }
 
 func TestHealthWhenTheDatabaseDoesNotAnswer(t *testing.T) {
-	mux, buf := newMux(&pinger{err: errors.New("connection refused")})
+	mux, buf := newAPI(httpapi.Deps{DB: &pinger{err: errors.New("connection refused")}})
 	w := serve(httpapi.RequestID(mux), httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
