@@ -17,7 +17,9 @@ import (
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/db"
+	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
+	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -94,6 +96,13 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	// Deferred, so the pool closes only after the server has shut down and no request can use it.
 	defer pool.Close()
 
+	files, err := download.OpenFiles(cfg.FilesDir)
+	if err != nil {
+		return err
+	}
+	defer files.Close()
+	products := product.NewService(db.NewProducts(pool), files)
+
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
@@ -106,7 +115,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	defer cancelRequests()
 
 	srv := &http.Server{
-		Handler:           routes(cfg, logger, httpapi.Deps{DB: pool, Log: logger}),
+		Handler:           routes(cfg, logger, httpapi.Deps{DB: pool, Products: products, Log: logger}),
 		BaseContext:       func(net.Listener) context.Context { return reqCtx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
