@@ -15,6 +15,7 @@ import (
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
+	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
 const (
@@ -26,6 +27,15 @@ type pinger struct{}
 
 func (pinger) Ping(context.Context) error { return nil }
 
+// catalogue is a product service with nothing for sale.
+type catalogue struct{}
+
+func (catalogue) List(context.Context, bool) ([]product.Product, error) { return nil, nil }
+
+func (catalogue) GetBySlug(context.Context, string) (product.Product, error) {
+	return product.Product{}, product.ErrNotFound
+}
+
 // panicker is a database whose Ping panics.
 type panicker struct{}
 
@@ -36,7 +46,7 @@ var cfg = config.Config{AdminUser: adminUser, AdminPass: adminPass}
 // newRouter returns the server's real handler, with test credentials and a database that answers.
 func newRouter() http.Handler {
 	log := slog.New(slog.DiscardHandler)
-	return routes(cfg, log, httpapi.Deps{DB: pinger{}, Log: log})
+	return routes(cfg, log, httpapi.Deps{DB: pinger{}, Products: catalogue{}, Log: log})
 }
 
 func request(h http.Handler, method, path string, prepare ...func(*http.Request)) *httptest.ResponseRecorder {
@@ -104,9 +114,14 @@ func TestAdminRoutesWithCredentials(t *testing.T) {
 }
 
 func TestPublicRoutesNeedNoCredentials(t *testing.T) {
-	w := request(newRouter(), http.MethodGet, "/healthz")
+	h := newRouter()
+	w := request(h, http.MethodGet, "/healthz")
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "ok\n", w.Body.String())
+
+	w = request(h, http.MethodGet, "/api/v1/products")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"products": []}`, w.Body.String())
 }
 
 func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
