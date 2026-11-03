@@ -1,9 +1,11 @@
-// Package httpapi holds the server's HTTP middleware: request ids, the access log and panic
-// recovery.
+// Package httpapi holds the server's HTTP middleware (request ids, the access log, panic recovery
+// and basic auth) and the API's routes.
 package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"maps"
@@ -79,6 +81,30 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 				writeError(w, http.StatusInternalServerError, codeInternal, "internal error")
 			}()
 			next.ServeHTTP(rec, r)
+		})
+	}
+}
+
+// BasicAuth returns middleware that requires the HTTP basic credentials user and pass. A request
+// without them, or with any others, gets a 401 unauthorized envelope with a WWW-Authenticate
+// challenge, and never reaches next. The credentials are compared as SHA-256 digests in constant
+// time, so how long the check takes says nothing about how much of them was right, or how long
+// they are.
+func BasicAuth(user, pass string) func(http.Handler) http.Handler {
+	wantUser, wantPass := sha256.Sum256([]byte(user)), sha256.Sum256([]byte(pass))
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, p, ok := r.BasicAuth()
+			gotUser, gotPass := sha256.Sum256([]byte(u)), sha256.Sum256([]byte(p))
+			// Both comparisons always run, so a right user name takes no longer to refuse.
+			match := subtle.ConstantTimeCompare(gotUser[:], wantUser[:]) &
+				subtle.ConstantTimeCompare(gotPass[:], wantPass[:])
+			if !ok || match != 1 {
+				w.Header().Set("WWW-Authenticate", `Basic realm="solpay-shop admin"`)
+				writeError(w, http.StatusUnauthorized, codeUnauthorized, "admin credentials required")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
