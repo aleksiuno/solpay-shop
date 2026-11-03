@@ -4,7 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
+	"uuid"
 
+	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
@@ -12,6 +15,9 @@ import (
 type Deps struct {
 	DB       Pinger // checked by /healthz
 	Products Products
+	Orders   Orders
+	Merchant string           // the address that receives payments
+	Now      func() time.Time // the clock that decides whether an order can still be paid
 	Log      *slog.Logger
 }
 
@@ -19,6 +25,12 @@ type Deps struct {
 type Products interface {
 	List(ctx context.Context, activeOnly bool) ([]product.Product, error)
 	GetBySlug(ctx context.Context, slug string) (product.Product, error)
+}
+
+// Orders places and gets orders. *order.Service is one.
+type Orders interface {
+	Create(ctx context.Context, slug string, qty int) (order.Order, error)
+	Get(ctx context.Context, id uuid.UUID) (order.Order, error)
 }
 
 // api serves the JSON API with its Deps.
@@ -32,5 +44,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.Handle("GET /healthz", health(d.DB, d.Log))
 	mux.HandleFunc("GET /api/v1/products", a.listProducts)
 	mux.HandleFunc("GET /api/v1/products/{slug}", a.getProduct)
+	mux.HandleFunc("POST /api/v1/orders", a.createOrder)
+	mux.HandleFunc("GET /api/v1/orders/{id}", a.getOrder)
 	mux.Handle("/api/v1/", unknown(mux, "/api/v1/"))
 }
