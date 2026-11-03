@@ -32,4 +32,5 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.Handle("GET /healthz", health(d.DB, d.Log))
 	mux.HandleFunc("GET /api/v1/products", a.listProducts)
 	mux.HandleFunc("GET /api/v1/products/{slug}", a.getProduct)
+	mux.Handle("/api/v1/", unknown(mux, "/api/v1/"))
 }
