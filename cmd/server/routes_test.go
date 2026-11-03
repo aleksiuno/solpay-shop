@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,14 @@ func TestPublicRoutesNeedNoCredentials(t *testing.T) {
 	assert.JSONEq(t, `{"products": []}`, w.Body.String())
 }
 
+// A cross-site form cannot place an order: the refusal comes before the order service, which
+// newRouter leaves unset.
+func TestCrossSiteOrdersAreRefused(t *testing.T) {
+	w := request(newRouter(), http.MethodPost, "/api/v1/orders", crossSite)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, "forbidden", errorCode(t, w))
+}
+
 func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
 	h := newRouter()
 	w := request(h, http.MethodGet, "/api/v1/no-such-endpoint")
@@ -192,4 +201,12 @@ func TestEveryResponseHasARequestID(t *testing.T) {
 	} {
 		assert.Len(t, w.Header().Get("X-Request-ID"), 36)
 	}
+}
+
+// The clock that the order service and the API share is in UTC, in the microseconds that Postgres
+// keeps, so the times in a 201 are the ones a later read returns.
+func TestNow(t *testing.T) {
+	assert.Equal(t, time.UTC, now().Location())
+	in := time.Date(2026, 11, 3, 14, 0, 0, 123_456_789, time.FixedZone("EET", 2*60*60))
+	assert.Equal(t, time.Date(2026, 11, 3, 12, 0, 0, 123_456_000, time.UTC), utcMicros(in))
 }
