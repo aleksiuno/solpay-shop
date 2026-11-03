@@ -17,6 +17,7 @@ import (
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/db"
+	"github.com/aleksiuno/solpay-shop/internal/httpapi"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -46,6 +47,8 @@ func main() {
 		stdout.Error("open log file", "error", err)
 		os.Exit(1)
 	}
+	// Lines logged with a request's context carry its request id.
+	logger = slog.New(httpapi.ContextHandler{Handler: logger.Handler()})
 
 	runErr := run(logger, cfg, *migrateOnly)
 	if runErr != nil {
@@ -80,20 +83,31 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 		return nil
 	}
 
+	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		if ctx.Err() != nil {
+			logger.InfoContext(ctx, "stopping before the server starts", "cause", context.Cause(ctx))
+			return nil
+		}
+		return err
+	}
+	// Deferred, so the pool closes only after the server has shut down and no request can use it.
+	defer pool.Close()
+
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
 		return err
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "ok")
-	})
+	// The requests' contexts, which a shutdown that times out cancels. pool.Close waits for every
+	// connection to come back, so it would otherwise wait for any request still running.
+	reqCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRequests()
 
 	srv := &http.Server{
-		Handler:           mux,
+		Handler:           routes(cfg, logger, httpapi.Deps{DB: pool, Log: logger}),
+		BaseContext:       func(net.Listener) context.Context { return reqCtx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -115,7 +129,9 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+		// Ends the requests still running and their queries, then their connections.
+		cancelRequests()
+		return errors.Join(fmt.Errorf("shutdown: %w", err), srv.Close())
 	}
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)

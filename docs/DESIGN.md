@@ -83,7 +83,17 @@ Configuration comes only from the environment. Secrets and the merchant address 
 without them.
 
 Logs are JSON lines on stdout, plus an optional file (`LOG_FILE`) for runs on the host. Under
-compose the app logs to stdout only, because Docker already keeps it.
+compose the app logs to stdout only, because Docker already keeps it. Every request gets a random
+id, returned in the `X-Request-ID` header and added to each line the server logs with the
+request's context, so its access log line, events and errors can be matched. The access log leaves
+out query strings, because a download link carries its signature in one.
+
+The admin pages and the admin API, under `/admin/` and `/api/v1/admin/`, share one basic auth
+check that compares the credentials in constant time. A browser resends basic credentials on its
+own, so another site could submit a form to an admin route. Go's `http.CrossOriginProtection`
+refuses every cross-site request with an unsafe method before it reaches a route, using the
+`Sec-Fetch-Site` and `Origin` headers that browsers send, so no CSRF tokens are needed. curl and
+other clients that send neither header pass.
 
 The server applies pending migrations when it starts, so `go run ./cmd/server` needs no separate
 step. golang-migrate holds a Postgres advisory lock while it runs, so servers that start together
