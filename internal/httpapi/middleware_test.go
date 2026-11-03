@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -198,4 +199,63 @@ func TestRecoverLeavesAResponseWithoutPanicAlone(t *testing.T) {
 	w := serve(h, httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.Equal(t, http.StatusAccepted, w.Code)
 	assert.Empty(t, buf.String())
+}
+
+func TestBasicAuth(t *testing.T) {
+	const user, pass = "admin", "test-only-password"
+	tests := []struct {
+		name    string
+		prepare func(r *http.Request)
+		ok      bool
+	}{
+		{"no credentials", func(*http.Request) {}, false},
+		{"a wrong user", func(r *http.Request) { r.SetBasicAuth("root", pass) }, false},
+		{"a wrong password", func(r *http.Request) { r.SetBasicAuth(user, "wrong-password") }, false},
+		{"part of the password", func(r *http.Request) { r.SetBasicAuth(user, pass[:4]) }, false},
+		{"the password with more after it", func(r *http.Request) { r.SetBasicAuth(user, pass+"x") }, false},
+		{"user and password swapped", func(r *http.Request) { r.SetBasicAuth(pass, user) }, false},
+		{"another scheme", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+pass) }, false},
+		{"the right credentials", func(r *http.Request) { r.SetBasicAuth(user, pass) }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reached := false
+			h := httpapi.BasicAuth(user, pass)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			r := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+			tt.prepare(r)
+			w := serve(h, r)
+
+			assert.Equal(t, tt.ok, reached)
+			if tt.ok {
+				assert.Equal(t, http.StatusNoContent, w.Code)
+				assert.Empty(t, w.Header().Values("WWW-Authenticate"))
+				return
+			}
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Equal(t, `Basic realm="solpay-shop admin"`, w.Header().Get("WWW-Authenticate"))
+			code, _ := envelope(t, w.Body)
+			assert.Equal(t, "unauthorized", code)
+		})
+	}
+}
+
+// A request without credentials is refused even when the expected ones are empty, which r.BasicAuth
+// also returns for a request that sends none.
+func TestBasicAuthRefusesNoCredentialsEvenWhenEmptyAreExpected(t *testing.T) {
+	h := httpapi.BasicAuth("", "")(nothing)
+	w := serve(h, httptest.NewRequest(http.MethodGet, "/admin/", nil))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// envelope decodes a JSON error envelope.
+func envelope(t *testing.T, body io.Reader) (code, message string) {
+	t.Helper()
+	var e struct {
+		Error struct{ Code, Message string }
+	}
+	require.NoError(t, json.NewDecoder(body).Decode(&e))
+	return e.Error.Code, e.Error.Message
 }
