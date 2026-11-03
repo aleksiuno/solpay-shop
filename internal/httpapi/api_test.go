@@ -77,6 +77,47 @@ func TestAdminAPIAnswersAnUnknownPathWithNotFound(t *testing.T) {
 	}
 }
 
+func TestUnknownAPIPaths(t *testing.T) {
+	mux, _ := newAPI(httpapi.Deps{Products: &catalogue{}})
+	tests := []struct {
+		method, path string
+		code         int
+		allow        string
+	}{
+		{http.MethodGet, "/api/v1/", http.StatusNotFound, ""},
+		{http.MethodGet, "/api/v1/no-such-endpoint", http.StatusNotFound, ""},
+		{http.MethodPost, "/api/v1/no-such-endpoint", http.StatusNotFound, ""},
+		{http.MethodGet, "/api/v1/products/a/b", http.StatusNotFound, ""},
+		{http.MethodPost, "/api/v1/products", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodDelete, "/api/v1/products/go-payments-checklist", http.StatusMethodNotAllowed, "GET, HEAD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			w := serve(mux, httptest.NewRequest(tt.method, tt.path, nil))
+			assert.Equal(t, tt.code, w.Code)
+			assert.Equal(t, tt.allow, w.Header().Get("Allow"))
+			code, _ := envelope(t, w.Body)
+			if tt.code == http.StatusNotFound {
+				assert.Equal(t, "not_found", code)
+			} else {
+				assert.Equal(t, "method_not_allowed", code)
+			}
+		})
+	}
+}
+
+func TestAdminAPIAnswersAWrongMethodWithMethodNotAllowed(t *testing.T) {
+	mux := http.NewServeMux()
+	httpapi.RegisterAdmin(mux)
+	mux.HandleFunc("POST /api/v1/admin/orders/{id}/refund", func(http.ResponseWriter, *http.Request) {})
+	w := serve(mux, httptest.NewRequest(http.MethodGet, "/api/v1/admin/orders/1/refund", nil))
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	assert.Equal(t, "POST", w.Header().Get("Allow"))
+	code, _ := envelope(t, w.Body)
+	assert.Equal(t, "method_not_allowed", code)
+}
+
 func TestForbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 	httpapi.Forbidden(w, httptest.NewRequest(http.MethodPost, "/", nil))

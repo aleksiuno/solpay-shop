@@ -12,10 +12,11 @@ import (
 
 // Codes of the JSON error envelope. Clients may rely on them: a code never changes its meaning.
 const (
-	codeNotFound     = "not_found"
-	codeUnauthorized = "unauthorized"
-	codeForbidden    = "forbidden"
-	codeInternal     = "internal"
+	codeNotFound         = "not_found"
+	codeMethodNotAllowed = "method_not_allowed"
+	codeUnauthorized     = "unauthorized"
+	codeForbidden        = "forbidden"
+	codeInternal         = "internal"
 )
 
 // errorBody is the JSON error envelope: {"error": {"code": "...", "message": "..."}}. The code is

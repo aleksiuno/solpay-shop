@@ -109,6 +109,18 @@ func TestPublicRoutesNeedNoCredentials(t *testing.T) {
 	assert.Equal(t, "ok\n", w.Body.String())
 }
 
+func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
+	h := newRouter()
+	w := request(h, http.MethodGet, "/api/v1/no-such-endpoint")
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, "not_found", errorCode(t, w))
+
+	w = request(h, http.MethodPost, "/api/v1/products")
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	assert.Equal(t, "GET, HEAD", w.Header().Get("Allow"))
+	assert.Equal(t, "method_not_allowed", errorCode(t, w))
+}
+
 func TestCrossOriginUnsafeRequestsAreRefused(t *testing.T) {
 	h := newRouter()
 	for _, path := range []string{"/healthz", "/api/v1/admin/no-such-endpoint", "/admin/no-such-page"} {
