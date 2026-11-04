@@ -34,3 +34,10 @@ SELECT id FROM orders WHERE id = @id FOR UPDATE;
 UPDATE orders
 SET status = @to_status, refunded_at = @refunded_at, updated_at = now()
 WHERE id = @id AND status = @from_status;
+
+-- name: UpdateOrderPayment :execrows
+-- Stores what a payment did to the order. Like RefundOrder, it changes only an order still in the
+-- status the caller read.
+UPDATE orders
+SET status = @to_status, received_lamports = @received_lamports, paid_at = @paid_at, updated_at = now()
+WHERE id = @id AND status = @from_status;
