@@ -46,6 +46,35 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) error 
 	return err
 }
 
+const expireOrder = `-- name: ExpireOrder :one
+UPDATE orders
+SET status = $1, updated_at = now()
+WHERE id = $2 AND status = $3 AND expires_at < $4
+RETURNING expires_at
+`
+
+type ExpireOrderParams struct {
+	ToStatus   string
+	ID         uuid.UUID
+	FromStatus string
+	Cutoff     time.Time
+}
+
+// Expires an order that is still in from_status and whose deadline is before the cutoff, and
+// returns the deadline. Any other order, one paid meanwhile included, changes no row and returns
+// none.
+func (q *Queries) ExpireOrder(ctx context.Context, arg ExpireOrderParams) (time.Time, error) {
+	row := q.db.QueryRow(ctx, expireOrder,
+		arg.ToStatus,
+		arg.ID,
+		arg.FromStatus,
+		arg.Cutoff,
+	)
+	var expires_at time.Time
+	err := row.Scan(&expires_at)
+	return expires_at, err
+}
+
 const getOrder = `-- name: GetOrder :one
 SELECT o.id, o.product_id, o.quantity, o.amount_lamports, o.reference, o.status, o.received_lamports, o.expires_at, o.next_poll_at, o.paid_at, o.fulfilled_at, o.refunded_at, o.created_at, o.updated_at, p.slug AS product_slug, p.title AS product_title,
        EXISTS (SELECT 1 FROM payments pm WHERE pm.order_id = o.id AND pm.outcome = 'late') AS has_late_payment

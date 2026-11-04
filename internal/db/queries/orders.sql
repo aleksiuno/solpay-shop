@@ -66,3 +66,12 @@ UPDATE orders SET next_poll_at = @next_poll_at, updated_at = now() WHERE id = @i
 -- when their last poll did not.
 UPDATE orders SET next_poll_at = NULL, updated_at = now()
 WHERE next_poll_at IS NOT NULL AND status IN ('underpaid', 'expired') AND expires_at <= @late_cutoff;
+
+-- name: ExpireOrder :one
+-- Expires an order that is still in from_status and whose deadline is before the cutoff, and
+-- returns the deadline. Any other order, one paid meanwhile included, changes no row and returns
+-- none.
+UPDATE orders
+SET status = @to_status, updated_at = now()
+WHERE id = @id AND status = @from_status AND expires_at < @cutoff
+RETURNING expires_at;
