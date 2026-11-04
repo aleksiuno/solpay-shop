@@ -53,10 +53,22 @@ keyed endpoint's URL never appears in its errors.
 
 The payment watcher is a goroutine in the same process. Each order has its own reference, a random
 32-byte address that the customer's payment lists as an extra account. On each tick the watcher
-asks the RPC node for the transactions that mention the reference of each pending, underpaid or
-recently expired order, verifies them, and records each result and its events in one database
+asks the RPC node for the transactions that mention the reference of each due order that is
+pending, underpaid or recently expired, verifies them, and records each result and its events in one database
 transaction. The reference is 32 random bytes, not a generated keypair: an account that never
 signs needs no private key, so the shop holds no keys at all.
+
+Each order holds the time its next poll is due. A tick takes the orders that have been due
+longest, a batch at a time, and gives each order it polls a new time, even when the poll fails, so
+every watched order gets its turn however many there are. An order that needs no more polls has
+its time cleared, which takes it out of a partial index of the orders still watched, so finding the
+due orders reads a few index pages however many orders the shop keeps. Underpaid and expired
+orders are watched until an hour past their deadline. Each tick also clears the time of any such
+order whose hour ended before its last poll came round, as can happen after downtime, so no order
+stays in the index for good. The query that finds the due orders reads the orders table alone.
+Reading one order also checks the ledger for a late payment; in a test with 200,000 orders,
+putting that check in the due-orders query let a generic plan, which Postgres may cache for a
+prepared statement, scan all 150,000 ledger rows.
 
 The event log has a package of its own, `internal/audit`, which imports no other package of the
 shop. The order, payment and download code all emit events. Most arise in payment, but the event
