@@ -128,7 +128,8 @@ demo seed always finds the schema; the app's own check then finds nothing to app
 | expired | refunded | the same, but only if a payment arrived after the deadline | admin |
 
 A payment is on time if its block time is not after the deadline, and only on-time payments count
-towards the amount. An overpayment counts as paid in full and is logged as a warning. A top-up that
+towards the amount. When the RPC node gives no block time, the time the payment was first seen
+stands in for it. An overpayment counts as paid in full and is logged as a warning. A top-up that
 is still short leaves the order underpaid, and a payment after the deadline is recorded as late
 without changing the status. A refund is marked by an admin; the SOL itself is returned outside the
 shop.
