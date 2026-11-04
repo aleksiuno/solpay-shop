@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"time"
 	"uuid"
 
 	"github.com/jackc/pgx/v5"
@@ -119,6 +121,53 @@ func (s *Payments) KnownSignatures(ctx context.Context, sigs []string) (map[stri
 		known[sig] = true
 	}
 	return known, nil
+}
+
+// WatchSet returns up to limit orders that are due for a poll at now, the longest due first: every
+// pending order, and each underpaid or expired one whose deadline is after lateCutoff. An order is
+// due once its next poll time is not after now. Create sets that time to the order's creation time,
+// and MarkPolled moves it. Only the orders table is read, so the orders' product slug and title
+// are empty and HasLatePayment is false; Apply reads an order in full, under its lock, before it
+// changes anything.
+func (s *Payments) WatchSet(ctx context.Context, now, lateCutoff time.Time, limit int) ([]order.Order, error) {
+	if limit < 0 || limit > math.MaxInt32 {
+		return nil, fmt.Errorf("watch set: limit %d out of range", limit)
+	}
+	rows, err := s.q.WatchSet(ctx, sqlcdb.WatchSetParams{Now: now, LateCutoff: lateCutoff, BatchSize: int32(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("watch set: %w", err)
+	}
+	out := make([]order.Order, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toOrder(r, "", "", false))
+	}
+	return out, nil
+}
+
+// MarkPolled sets when the order with orderID is next due for a poll. A nil next means it needs no
+// more polls, so WatchSet never returns it again. An unknown order gives order.ErrNotFound.
+func (s *Payments) MarkPolled(ctx context.Context, orderID uuid.UUID, next *time.Time) error {
+	n, err := s.q.MarkPolled(ctx, sqlcdb.MarkPolledParams{ID: orderID, NextPollAt: next})
+	if err != nil {
+		return fmt.Errorf("mark polled: %w", err)
+	}
+	if n == 0 {
+		return order.ErrNotFound
+	}
+	return nil
+}
+
+// StopPolling ends the polling of every underpaid or expired order whose deadline is at or before
+// lateCutoff, as MarkPolled with a nil time does, and returns how many orders it changed. WatchSet
+// leaves such an order out, so if its last poll came after its late window had ended, because
+// polling ran late or the shop was down, the order would keep its next poll time, and its entry
+// in the index that WatchSet reads, for good.
+func (s *Payments) StopPolling(ctx context.Context, lateCutoff time.Time) (int64, error) {
+	n, err := s.q.StopPolling(ctx, lateCutoff)
+	if err != nil {
+		return 0, fmt.Errorf("stop polling: %w", err)
+	}
+	return n, nil
 }
 
 func insertPaymentParams(p payment.Payment) sqlcdb.InsertPaymentParams {

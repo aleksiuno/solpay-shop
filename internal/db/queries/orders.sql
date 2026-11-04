@@ -41,3 +41,28 @@ WHERE id = @id AND status = @from_status;
 UPDATE orders
 SET status = @to_status, received_lamports = @received_lamports, paid_at = @paid_at, updated_at = now()
 WHERE id = @id AND status = @from_status;
+
+-- name: WatchSet :many
+-- Returns up to batch_size orders that are due for a poll at now, the longest due first: pending
+-- orders, and underpaid or expired orders whose deadline is after late_cutoff. The status list is
+-- the one in orders_watch_idx, written as literals, so that the planner reads that index in
+-- next_poll_at order and stops at the limit, whatever the parameters. The query reads the orders
+-- table alone: with GetOrder's late-payment check in it, a generic plan could scan the whole
+-- ledger.
+SELECT * FROM orders
+WHERE next_poll_at <= sqlc.arg(now)::timestamptz
+  AND status IN ('pending', 'underpaid', 'expired')
+  AND (status = 'pending' OR expires_at > sqlc.arg(late_cutoff)::timestamptz)
+ORDER BY next_poll_at
+LIMIT @batch_size;
+
+-- name: MarkPolled :execrows
+-- Sets when the order is next due for a poll. NULL means it needs no more polls.
+UPDATE orders SET next_poll_at = @next_poll_at, updated_at = now() WHERE id = @id;
+
+-- name: StopPolling :execrows
+-- Clears the next poll time of every underpaid or expired order whose deadline is at or before
+-- late_cutoff. WatchSet leaves such orders out, so this is what takes them out of orders_watch_idx
+-- when their last poll did not.
+UPDATE orders SET next_poll_at = NULL, updated_at = now()
+WHERE next_poll_at IS NOT NULL AND status IN ('underpaid', 'expired') AND expires_at <= @late_cutoff;

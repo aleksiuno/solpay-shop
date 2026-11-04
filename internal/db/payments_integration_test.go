@@ -4,9 +4,12 @@ package db_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"log/slog"
+	"math"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -319,4 +322,150 @@ func TestUpdateOrderPaymentChangesOnlyTheStatusItWasGiven(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 	assert.Equal(t, int64(1_000), getOrder(t, o.ID).ReceivedLamports)
+}
+
+// watchTime is the clock of the WatchSet tests. It is years before any other test's orders are
+// created, and so before they are first due for a poll.
+var watchTime = time.Date(2001, time.February, 3, 4, 5, 6, 0, time.UTC)
+
+// watchedOrder stores an order in status s with the deadline expiresAt and the next poll time next.
+// It takes the order out of the rotation when the test ends, so that WatchSet returns only the
+// orders of the test that calls it.
+func watchedOrder(t *testing.T, s order.Status, expiresAt time.Time, next *time.Time) order.Order {
+	t.Helper()
+	o := storedOrder(t, s)
+	_, err := pool.Exec(t.Context(), `UPDATE orders SET expires_at = $2, next_poll_at = $3 WHERE id = $1`, o.ID, expiresAt, next)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := pool.Exec(context.WithoutCancel(t.Context()), `UPDATE orders SET next_poll_at = NULL WHERE id = $1`, o.ID)
+		assert.NoError(t, err)
+	})
+	o.ExpiresAt = expiresAt
+	return o
+}
+
+// nextPoll returns the stored next poll time of the order with id.
+func nextPoll(t *testing.T, id uuid.UUID) *time.Time {
+	t.Helper()
+	var next *time.Time
+	require.NoError(t, pool.QueryRow(t.Context(), `SELECT next_poll_at FROM orders WHERE id = $1`, id).Scan(&next))
+	return next
+}
+
+func ids(orders []order.Order) []uuid.UUID {
+	out := []uuid.UUID{}
+	for _, o := range orders {
+		out = append(out, o.ID)
+	}
+	return out
+}
+
+func TestPaymentsWatchSet(t *testing.T) {
+	payments, _ := newPayments()
+	now, cutoff := watchTime, watchTime.Add(-time.Hour)
+	due := new(now.Add(-time.Second))
+	soon, inWindow, beforeWindow := now.Add(15*time.Minute), now.Add(-30*time.Minute), now.Add(-2*time.Hour)
+
+	expiredLate := watchedOrder(t, order.Expired, inWindow, due)
+	addPayment(t, pool, expiredLate.ID, "late")
+	want := []uuid.UUID{
+		watchedOrder(t, order.Pending, soon, due).ID,
+		watchedOrder(t, order.Pending, beforeWindow, due).ID, // watched until it is expired
+		watchedOrder(t, order.Underpaid, inWindow, due).ID,
+		expiredLate.ID,
+		watchedOrder(t, order.Pending, soon, new(now)).ID,
+	}
+	for _, s := range []order.Status{order.Paid, order.Fulfilled, order.Refunded} {
+		watchedOrder(t, s, soon, due)
+	}
+	watchedOrder(t, order.Underpaid, beforeWindow, due)
+	watchedOrder(t, order.Expired, beforeWindow, due)
+	watchedOrder(t, order.Expired, cutoff, due)                          // a deadline at the cutoff is out of the window
+	watchedOrder(t, order.Pending, soon, new(now.Add(time.Microsecond))) // not due yet
+	watchedOrder(t, order.Pending, soon, nil)                            // needs no more polls
+
+	got, err := payments.WatchSet(t.Context(), now, cutoff, 100)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, want, ids(got))
+	require.True(t, getOrder(t, expiredLate.ID).HasLatePayment)
+	for _, o := range got {
+		stored := getOrder(t, o.ID)
+		stored.ProductSlug, stored.ProductTitle, stored.HasLatePayment = "", "", false
+		assertSameOrder(t, stored, o) // the orders table alone: no product, no late flag
+	}
+}
+
+func TestPaymentsWatchSetTakesTheLongestDueFirst(t *testing.T) {
+	payments, _ := newPayments()
+	now, cutoff, soon := watchTime, watchTime.Add(-time.Hour), watchTime.Add(15*time.Minute)
+	second := watchedOrder(t, order.Pending, soon, new(now.Add(-2*time.Second)))
+	third := watchedOrder(t, order.Pending, soon, new(now.Add(-time.Second)))
+	first := watchedOrder(t, order.Underpaid, soon, new(now.Add(-3*time.Second)))
+
+	for limit, want := range [][]uuid.UUID{{}, {first.ID}, {first.ID, second.ID}, {first.ID, second.ID, third.ID}} {
+		got, err := payments.WatchSet(t.Context(), now, cutoff, limit)
+		require.NoError(t, err)
+		assert.Equal(t, want, ids(got), "limit %d", limit)
+	}
+}
+
+func TestPaymentsWatchSetRefusesALimitOutOfRange(t *testing.T) {
+	payments, _ := newPayments()
+	for _, limit := range []int{-1, math.MaxInt32 + 1} {
+		_, err := payments.WatchSet(t.Context(), watchTime, watchTime.Add(-time.Hour), limit)
+		assert.ErrorContains(t, err, "out of range", "limit %d", limit)
+	}
+}
+
+func TestPaymentsMarkPolled(t *testing.T) {
+	payments, _ := newPayments()
+	now := watchTime
+	o := watchedOrder(t, order.Pending, now.Add(15*time.Minute), new(now))
+	watched := func(at time.Time) bool {
+		got, err := payments.WatchSet(t.Context(), at, at.Add(-time.Hour), 100)
+		require.NoError(t, err)
+		return slices.Contains(ids(got), o.ID)
+	}
+	require.True(t, watched(now))
+
+	next := now.Add(5 * time.Second)
+	require.NoError(t, payments.MarkPolled(t.Context(), o.ID, &next))
+	assert.False(t, watched(next.Add(-time.Microsecond)), "not due again before next")
+	assert.True(t, watched(next))
+
+	require.NoError(t, payments.MarkPolled(t.Context(), o.ID, nil))
+	assert.False(t, watched(now.Add(time.Hour)), "no more polls")
+	assert.Nil(t, nextPoll(t, o.ID))
+
+	assert.ErrorIs(t, payments.MarkPolled(t.Context(), uuid.NewV4(), &next), order.ErrNotFound)
+}
+
+func TestPaymentsStopPolling(t *testing.T) {
+	payments, _ := newPayments()
+	now, cutoff := watchTime, watchTime.Add(-time.Hour)
+	due, notDue := new(now.Add(-time.Second)), new(now.AddDate(100, 0, 0)) // not due by any clock
+	inWindow, beforeWindow := now.Add(-30*time.Minute), now.Add(-2*time.Hour)
+
+	stopped := []order.Order{
+		watchedOrder(t, order.Underpaid, beforeWindow, due),
+		watchedOrder(t, order.Expired, beforeWindow, due),
+		watchedOrder(t, order.Expired, beforeWindow, notDue),
+		watchedOrder(t, order.Expired, cutoff, due), // a deadline at the cutoff is out of the window
+	}
+	kept := []order.Order{
+		watchedOrder(t, order.Pending, beforeWindow, due), // polled until it is expired
+		watchedOrder(t, order.Underpaid, inWindow, due),
+		watchedOrder(t, order.Expired, inWindow, notDue),
+	}
+	watchedOrder(t, order.Expired, beforeWindow, nil) // no poll time to clear, so not counted
+
+	n, err := payments.StopPolling(t.Context(), cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(stopped)), n)
+	for _, o := range stopped {
+		assert.Nil(t, nextPoll(t, o.ID), "%s order, deadline %s", o.Status, o.ExpiresAt)
+	}
+	for _, o := range kept {
+		assert.NotNil(t, nextPoll(t, o.ID), "%s order, deadline %s", o.Status, o.ExpiresAt)
+	}
 }
