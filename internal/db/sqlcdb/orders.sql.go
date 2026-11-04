@@ -187,3 +187,33 @@ func (q *Queries) RefundOrder(ctx context.Context, arg RefundOrderParams) (int64
 	}
 	return result.RowsAffected(), nil
 }
+
+const updateOrderPayment = `-- name: UpdateOrderPayment :execrows
+UPDATE orders
+SET status = $1, received_lamports = $2, paid_at = $3, updated_at = now()
+WHERE id = $4 AND status = $5
+`
+
+type UpdateOrderPaymentParams struct {
+	ToStatus         string
+	ReceivedLamports int64
+	PaidAt           *time.Time
+	ID               uuid.UUID
+	FromStatus       string
+}
+
+// Stores what a payment did to the order. Like RefundOrder, it changes only an order still in the
+// status the caller read.
+func (q *Queries) UpdateOrderPayment(ctx context.Context, arg UpdateOrderPaymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateOrderPayment,
+		arg.ToStatus,
+		arg.ReceivedLamports,
+		arg.PaidAt,
+		arg.ID,
+		arg.FromStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
