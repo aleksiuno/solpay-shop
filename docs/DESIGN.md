@@ -215,6 +215,14 @@ the store makes it atomic.
   because it reads the order before it decides; expiry and fulfilment rely on the conditional
   UPDATE alone.
 
+A payment is credited once, however often it is seen. Applying one stores its ledger row first,
+with `INSERT … ON CONFLICT (signature) DO NOTHING`; if the signature is already there, the
+transaction stores only a `payment.duplicate_ignored` event and changes nothing else. The order's
+received total moves only in the transaction that stored the row, so a payment that the watcher
+sees again, after a restart or from a second watcher, adds nothing. The row lock does another job:
+when two payments to one order are applied at once, the second waits for the first and reads the
+total it stored, so neither overwrites the other's credit.
+
 If any step fails, the whole transaction rolls back, and its events are logged only after a
 commit. Transactions run at Postgres's default level, READ COMMITTED: the row lock and the
 conditional UPDATE are what keep two writers from moving the same order twice.
