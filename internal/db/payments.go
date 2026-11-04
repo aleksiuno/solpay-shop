@@ -170,6 +170,44 @@ func (s *Payments) StopPolling(ctx context.Context, lateCutoff time.Time) (int64
 	return n, nil
 }
 
+// Expire moves the order with orderID from pending to expired if its deadline is before cutoff,
+// and stores an order.expired event in the same transaction. The event names the unresolved
+// signatures, if there are any: transactions listed for the order that could not be read. Expire
+// reports whether it expired the order. Any other order is left as it is, and so is an unknown
+// one. The status change passes order.Transition, and the UPDATE names the old status, so an
+// order that a payment moved while Expire waited for its row keeps the status the payment gave it.
+func (s *Payments) Expire(ctx context.Context, orderID uuid.UUID, cutoff time.Time, unresolved []string) (bool, error) {
+	if err := order.Transition(order.Pending, order.Expired); err != nil {
+		return false, err
+	}
+	var evs []audit.Event
+	err := inTx(ctx, s.pool, func(q *sqlcdb.Queries) error {
+		expiresAt, err := q.ExpireOrder(ctx, sqlcdb.ExpireOrderParams{
+			ID:         orderID,
+			FromStatus: string(order.Pending),
+			ToStatus:   string(order.Expired),
+			Cutoff:     cutoff,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("expire order: %w", err)
+		}
+		data := map[string]any{"expires_at": expiresAt.UTC().Format(time.RFC3339Nano)}
+		if len(unresolved) > 0 {
+			data["unresolved_signatures"] = unresolved
+		}
+		evs = []audit.Event{{OrderID: &orderID, Kind: audit.OrderExpired, Message: "order expired", Data: data}}
+		return insertEvents(ctx, q, evs)
+	})
+	if err != nil {
+		return false, err
+	}
+	s.rec.Log(ctx, evs...)
+	return len(evs) > 0, nil
+}
+
 func insertPaymentParams(p payment.Payment) sqlcdb.InsertPaymentParams {
 	var reason *string
 	if p.Reason != "" {

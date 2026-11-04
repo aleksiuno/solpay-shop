@@ -469,3 +469,148 @@ func TestPaymentsStopPolling(t *testing.T) {
 		assert.NotNil(t, nextPoll(t, o.ID), "%s order, deadline %s", o.Status, o.ExpiresAt)
 	}
 }
+
+func TestPaymentsExpire(t *testing.T) {
+	now := testNow()
+	cutoff, deadline := now.Add(-2*time.Minute), now.Add(-3*time.Minute)
+	events := db.NewEvents(pool)
+	for _, unresolved := range [][]string{nil, {"sig-a", "sig-b"}} {
+		payments, log := newPayments()
+		o := watchedOrder(t, order.Pending, deadline, new(now))
+		expired, err := payments.Expire(t.Context(), o.ID, cutoff, unresolved)
+		require.NoError(t, err)
+		assert.True(t, expired)
+		assert.Equal(t, order.Expired, getOrder(t, o.ID).Status)
+		assert.NotNil(t, nextPoll(t, o.ID), "still polled in the hour after its deadline")
+
+		want := map[string]any{"expires_at": deadline.UTC().Format(time.RFC3339Nano)}
+		if unresolved != nil {
+			want["unresolved_signatures"] = []any{"sig-a", "sig-b"}
+		}
+		evs, err := events.List(t.Context(), audit.ListFilter{OrderID: &o.ID})
+		require.NoError(t, err)
+		require.Len(t, evs, 1)
+		assert.Equal(t, audit.OrderExpired, evs[0].Kind)
+		assert.Equal(t, "order expired", evs[0].Message)
+		assert.Equal(t, want, evs[0].Data)
+		assert.Contains(t, log.String(), `"kind":"order.expired"`, "logged after the commit")
+
+		expired, err = payments.Expire(t.Context(), o.ID, cutoff, unresolved)
+		require.NoError(t, err)
+		assert.False(t, expired, "an expired order is not expired again")
+		assert.Len(t, eventKinds(t, o.ID), 1)
+	}
+}
+
+func TestPaymentsExpireLeavesOtherOrdersAlone(t *testing.T) {
+	payments, log := newPayments()
+	now := testNow()
+	cutoff, deadline := now.Add(-2*time.Minute), now.Add(-3*time.Minute)
+	orders := []order.Order{
+		watchedOrder(t, order.Pending, cutoff, nil), // a deadline at the cutoff is not before it
+		watchedOrder(t, order.Pending, now, nil),
+	}
+	for _, s := range []order.Status{order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded} {
+		orders = append(orders, watchedOrder(t, s, deadline, nil))
+	}
+	for _, o := range orders {
+		expired, err := payments.Expire(t.Context(), o.ID, cutoff, nil)
+		require.NoError(t, err)
+		assert.False(t, expired, "%s order, deadline %s", o.Status, o.ExpiresAt)
+		assert.Equal(t, o.Status, getOrder(t, o.ID).Status)
+		assert.Empty(t, eventKinds(t, o.ID))
+	}
+	expired, err := payments.Expire(t.Context(), uuid.NewV4(), cutoff, nil)
+	require.NoError(t, err)
+	assert.False(t, expired, "an unknown order")
+	assert.Empty(t, log.String())
+}
+
+// A payment applied while Expire waits for the order's row wins: the UPDATE reads the row again
+// once the lock is free, and the order is no longer pending.
+func TestPaymentsExpireWaitsForAPayment(t *testing.T) {
+	payments, _ := newPayments()
+	now := testNow()
+	o := watchedOrder(t, order.Pending, now.Add(-3*time.Minute), nil)
+
+	locked, release := make(chan struct{}), make(chan struct{})
+	free := sync.OnceFunc(func() { close(release) })
+	defer free()
+	applied := make(chan error, 1)
+	go func() {
+		_, err := payments.Apply(t.Context(), o.ID, func(l order.Order) (payment.Decision, error) {
+			close(locked)
+			<-release
+			blockTime := l.ExpiresAt.Add(-time.Minute)
+			c := payment.Candidate{Signature: newSignature(), Slot: 7, BlockTime: &blockTime, Verdict: payment.Verdict{Lamports: l.AmountLamports}}
+			return payment.Decide(l, c, now)
+		})
+		applied <- err
+	}()
+	select {
+	case <-locked:
+	case err := <-applied:
+		t.Fatalf("Apply returned before deciding: %v", err)
+	}
+	type result struct {
+		expired bool
+		err     error
+	}
+	expire := make(chan result, 1)
+	go func() {
+		expired, err := payments.Expire(t.Context(), o.ID, now.Add(-2*time.Minute), nil)
+		expire <- result{expired, err}
+	}()
+	waitForLockWait(t)
+	free()
+
+	require.NoError(t, <-applied)
+	r := <-expire
+	require.NoError(t, r.err)
+	assert.False(t, r.expired)
+	assert.Equal(t, order.Paid, getOrder(t, o.ID).Status)
+	assert.NotContains(t, eventKinds(t, o.ID), audit.OrderExpired)
+}
+
+// A payment applied after the expiry is recorded as late, even one made before the deadline, and
+// the late row lets an admin refund the order.
+func TestPaymentsPaymentAfterExpiryIsLate(t *testing.T) {
+	payments, _ := newPayments()
+	now := testNow()
+	o := watchedOrder(t, order.Pending, now.Add(-3*time.Minute), nil)
+	expired, err := payments.Expire(t.Context(), o.ID, now.Add(-2*time.Minute), nil)
+	require.NoError(t, err)
+	require.True(t, expired)
+
+	sig := newSignature()
+	applied, err := payments.Apply(t.Context(), o.ID, func(l order.Order) (payment.Decision, error) {
+		blockTime := l.ExpiresAt.Add(-time.Minute)
+		c := payment.Candidate{Signature: sig, Slot: 7, BlockTime: &blockTime, Verdict: payment.Verdict{Lamports: l.AmountLamports}}
+		return payment.Decide(l, c, now)
+	})
+	require.NoError(t, err)
+	assert.True(t, applied)
+	got := getOrder(t, o.ID)
+	assert.Equal(t, order.Expired, got.Status)
+	assert.Zero(t, got.ReceivedLamports)
+	assert.True(t, got.HasLatePayment)
+	row, _ := ledger(t, sig)
+	assert.Equal(t, "late", row.Outcome)
+
+	orders, _ := newOrders()
+	refunded, err := order.NewService(orders, nil, time.Minute, rand.Text, testNow).Refund(t.Context(), o.ID, "")
+	require.NoError(t, err)
+	assert.Equal(t, order.Refunded, refunded.Status)
+}
+
+func TestPaymentsExpireRollsBack(t *testing.T) {
+	payments, log := newPayments()
+	now := testNow()
+	o := watchedOrder(t, order.Pending, now.Add(-3*time.Minute), nil)
+	// jsonb has no NUL character, so the event cannot be saved.
+	expired, err := payments.Expire(t.Context(), o.ID, now.Add(-2*time.Minute), []string{"sig-\x00"})
+	require.ErrorContains(t, err, "insert a order.expired event")
+	assert.False(t, expired)
+	assert.Equal(t, order.Pending, getOrder(t, o.ID).Status, "not expired without its event")
+	assert.Empty(t, log.String())
+}
