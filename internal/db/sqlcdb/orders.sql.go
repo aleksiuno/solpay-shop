@@ -160,6 +160,24 @@ func (q *Queries) LockOrder(ctx context.Context, id uuid.UUID) (uuid.UUID, error
 	return id_2, err
 }
 
+const markPolled = `-- name: MarkPolled :execrows
+UPDATE orders SET next_poll_at = $1, updated_at = now() WHERE id = $2
+`
+
+type MarkPolledParams struct {
+	NextPollAt *time.Time
+	ID         uuid.UUID
+}
+
+// Sets when the order is next due for a poll. NULL means it needs no more polls.
+func (q *Queries) MarkPolled(ctx context.Context, arg MarkPolledParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPolled, arg.NextPollAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const refundOrder = `-- name: RefundOrder :execrows
 UPDATE orders
 SET status = $1, refunded_at = $2, updated_at = now()
@@ -182,6 +200,22 @@ func (q *Queries) RefundOrder(ctx context.Context, arg RefundOrderParams) (int64
 		arg.ID,
 		arg.FromStatus,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const stopPolling = `-- name: StopPolling :execrows
+UPDATE orders SET next_poll_at = NULL, updated_at = now()
+WHERE next_poll_at IS NOT NULL AND status IN ('underpaid', 'expired') AND expires_at <= $1
+`
+
+// Clears the next poll time of every underpaid or expired order whose deadline is at or before
+// late_cutoff. WatchSet leaves such orders out, so this is what takes them out of orders_watch_idx
+// when their last poll did not.
+func (q *Queries) StopPolling(ctx context.Context, lateCutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, stopPolling, lateCutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -216,4 +250,60 @@ func (q *Queries) UpdateOrderPayment(ctx context.Context, arg UpdateOrderPayment
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const watchSet = `-- name: WatchSet :many
+SELECT id, product_id, quantity, amount_lamports, reference, status, received_lamports, expires_at, next_poll_at, paid_at, fulfilled_at, refunded_at, created_at, updated_at FROM orders
+WHERE next_poll_at <= $1::timestamptz
+  AND status IN ('pending', 'underpaid', 'expired')
+  AND (status = 'pending' OR expires_at > $2::timestamptz)
+ORDER BY next_poll_at
+LIMIT $3
+`
+
+type WatchSetParams struct {
+	Now        time.Time
+	LateCutoff time.Time
+	BatchSize  int32
+}
+
+// Returns up to batch_size orders that are due for a poll at now, the longest due first: pending
+// orders, and underpaid or expired orders whose deadline is after late_cutoff. The status list is
+// the one in orders_watch_idx, written as literals, so that the planner reads that index in
+// next_poll_at order and stops at the limit, whatever the parameters. The query reads the orders
+// table alone: with GetOrder's late-payment check in it, a generic plan could scan the whole
+// ledger.
+func (q *Queries) WatchSet(ctx context.Context, arg WatchSetParams) ([]Order, error) {
+	rows, err := q.db.Query(ctx, watchSet, arg.Now, arg.LateCutoff, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Order{}
+	for rows.Next() {
+		var i Order
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.Quantity,
+			&i.AmountLamports,
+			&i.Reference,
+			&i.Status,
+			&i.ReceivedLamports,
+			&i.ExpiresAt,
+			&i.NextPollAt,
+			&i.PaidAt,
+			&i.FulfilledAt,
+			&i.RefundedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
