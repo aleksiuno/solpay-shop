@@ -38,6 +38,7 @@ change.
 | `method_not_allowed` | 405 | the path exists, but not with this method; the `Allow` header lists the methods it has |
 | `product_inactive` | 409 | an order for a product that is no longer for sale |
 | `slug_taken` | 409 | an admin create or update with a slug that another product has |
+| `invalid_transition` | 409 | a refund the order's status does not allow, such as for a pending order, or for an expired one that no payment reached after its deadline |
 | `unauthorized` | 401 | an admin path without the right basic auth credentials |
 | `forbidden` | 403 | a browser request from another origin with an unsafe method |
 | `internal` | 500 | anything else; the details are logged, never sent |
@@ -219,6 +220,22 @@ order above; `409 slug_taken`.
 
 Replaces every field of the product with the id, with a body as for `POST`, and answers `200` with
 the product. Errors: as for `POST`, and `404 not_found` for an unknown id or one that is not a UUID.
+
+### `POST /api/v1/admin/orders/{id}/refund`
+
+Marks the order refunded and answers `200` with it. The shop only records the refund: send the
+SOL back from the merchant wallet yourself. The body is a JSON object with an optional `note` of
+at most 500 characters, which the `order.refunded` event keeps.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/orders/<ORDER_ID>/refund \
+  -d '{"note": "sent back on request"}'
+```
+
+An order can be refunded once it has received something: when it is `underpaid`, `paid` or
+`fulfilled`, or `expired` after a payment that came too late. Errors: `409 invalid_transition`
+for any other order, `422 validation_failed` for a note that is too long or holds a NUL character,
+`404 not_found`, `400 invalid_request` for a body that is not one JSON object.
 
 ## Walkthrough
 
