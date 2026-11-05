@@ -1,0 +1,17 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · solpay-shop</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="site"><a class="brand" href="/">solpay-shop</a> <span class="tag">devnet</span></header>
+<main>
+{{template "content" .Data}}
+</main>
+<footer class="site">Digital downloads paid in SOL on Solana devnet. No real money is involved.</footer>
+</body>
+</html>
+{{end}}

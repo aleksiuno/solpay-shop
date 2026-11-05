@@ -148,7 +148,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	reqCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelRequests()
 
-	site := web.Deps{Downloads: downloads, Log: logger}
+	site := web.Deps{Products: products, Downloads: downloads, Log: logger}
 	api := httpapi.Deps{
 		DB: pool, Products: products, Orders: orders, Merchant: cfg.MerchantAddress, Now: now, Log: logger,
 	}

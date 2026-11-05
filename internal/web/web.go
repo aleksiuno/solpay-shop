@@ -1,21 +1,33 @@
-// Package web serves what a browser fetches outside the JSON API: the file of a paid order, by
-// its download link. Its handlers read the request, call a service and write the answer; the rules
-// live in the services.
+// Package web serves the shop's HTML pages and the downloads of paid orders. Its handlers read the
+// request, call a service and write the answer; the rules live in the services.
 package web
 
 import (
+	"bytes"
 	"context"
+	"embed"
+	"errors"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"uuid"
 
 	"github.com/aleksiuno/solpay-shop/internal/download"
+	"github.com/aleksiuno/solpay-shop/internal/money"
+	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
 // Deps holds what the web handlers need.
 type Deps struct {
+	Products  Products
 	Downloads Downloads
 	Log       *slog.Logger
+}
+
+// Products lists and finds products. *product.Service is one.
+type Products interface {
+	List(ctx context.Context, activeOnly bool) ([]product.Product, error)
+	GetBySlug(ctx context.Context, slug string) (product.Product, error)
 }
 
 // Downloads opens the files of paid orders. *download.Service is one.
@@ -23,13 +35,90 @@ type Downloads interface {
 	Open(ctx context.Context, id uuid.UUID, exp, sig string, fulfil bool) (download.File, error)
 }
 
-// site serves the web routes with its Deps.
+//go:embed templates static
+var assets embed.FS
+
+// funcs are the functions the templates may call.
+var funcs = template.FuncMap{
+	"sol": money.FormatSOL, // lamports as decimal SOL
+}
+
+// site serves the web routes with its Deps and the parsed pages, by file name.
 type site struct {
 	Deps
+	pages map[string]*template.Template
 }
 
 // Register adds the public routes to mux.
 func Register(mux *http.ServeMux, d Deps) {
-	s := site{d}
+	s := site{Deps: d, pages: parsePages()}
+	mux.HandleFunc("GET /static/style.css", styles)
+	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /d/{id}", s.download)
+}
+
+// parsePages parses each page in templates with the base layout. The templates are embedded, so
+// one that does not parse fails every test.
+func parsePages() map[string]*template.Template {
+	pages := map[string]*template.Template{}
+	for _, name := range []string{"home.html", "error.html"} {
+		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
+	}
+	return pages
+}
+
+// styles sends the style sheet, the one static file.
+func styles(w http.ResponseWriter, r *http.Request) {
+	http.ServeFileFS(w, r, assets, "static/style.css")
+}
+
+// view is what the base layout shows around a page: its title and the page's own data.
+type view struct {
+	Title string
+	Data  any
+}
+
+// render writes page with v and status. It renders into a buffer first, so a template that fails
+// gives a 500 instead of half a page.
+func (s site) render(w http.ResponseWriter, r *http.Request, status int, page string, v view) {
+	var buf bytes.Buffer
+	if err := s.pages[page].ExecuteTemplate(&buf, "base", v); err != nil {
+		s.Log.LogAttrs(r.Context(), slog.LevelError, "render page", slog.String("page", page), slog.Any("error", err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	// An error here means the client has gone; there is no one left to tell.
+	_, _ = buf.WriteTo(w)
+}
+
+// problem is what the error page says.
+type problem struct {
+	Heading, Message string
+}
+
+// fail answers err, which a service returned, with the error page that fits it. An error it does
+// not know is a 500, and is logged instead of shown.
+func (s site) fail(w http.ResponseWriter, r *http.Request, err error) {
+	ctx := r.Context()
+	switch {
+	case errors.Is(err, product.ErrNotFound):
+		s.problem(w, r, http.StatusNotFound, "Not found", "There is no such product.")
+	case ctx.Err() != nil:
+		// The client hung up, or the server is stopping; no one reads the answer.
+		s.Log.LogAttrs(ctx, slog.LevelWarn, "request canceled",
+			slog.Any("error", err), slog.Any("cause", context.Cause(ctx)))
+		s.problem(w, r, http.StatusInternalServerError, "Something went wrong", "Please try again.")
+	default:
+		s.Log.LogAttrs(ctx, slog.LevelError, "request failed", slog.Any("error", err))
+		s.problem(w, r, http.StatusInternalServerError, "Something went wrong", "Please try again.")
+	}
+}
+
+// problem answers with the error page.
+func (s site) problem(w http.ResponseWriter, r *http.Request, status int, heading, message string) {
+	s.render(w, r, status, "error.html", view{Title: heading, Data: problem{heading, message}})
 }
