@@ -269,6 +269,12 @@ func TestRefundNote(t *testing.T) {
 	_, err := newService(newRepo(o)).Refund(t.Context(), o.ID, strings.Repeat("ž", 500))
 	require.NoError(t, err, "500 characters")
 
+	// A browser counts a line break as one character but sends it as CRLF.
+	r := newRepo(o)
+	_, err = newService(r).Refund(t.Context(), o.ID, strings.Repeat("ž", 249)+"\r\n"+strings.Repeat("ž", 250))
+	require.NoError(t, err, "500 characters, one of them a line break")
+	assert.Equal(t, strings.Repeat("ž", 249)+"\n"+strings.Repeat("ž", 250), r.events[0].Data["note"])
+
 	for note, reason := range map[string]string{
 		strings.Repeat("ž", 501): "is longer than 500 characters",
 		"a\x00b":                 "must be valid UTF-8 text without NUL characters",

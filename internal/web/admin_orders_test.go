@@ -3,8 +3,10 @@ package web_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -18,13 +20,23 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
-// orderAdmin holds orders. A set err is returned by every call instead. It notes the filter List
-// was asked with, and how often.
+// orderAdmin holds orders. A set err is returned by every call instead, and refundErr by
+// Refund. It notes the filter List was asked with, how often, and the refunds asked for.
 type orderAdmin struct {
-	orders []order.Order
-	err    error
-	filter order.ListFilter
-	lists  int
+	orders    []order.Order
+	err       error
+	refundErr error
+	filter    order.ListFilter
+	lists     int
+	refunds   []string // the id and the note of each refund, joined by a space
+}
+
+func (a *orderAdmin) Refund(_ context.Context, id uuid.UUID, note string) (order.Order, error) {
+	a.refunds = append(a.refunds, id.String()+" "+note)
+	if a.refundErr != nil {
+		return order.Order{}, a.refundErr
+	}
+	return order.Order{ID: id, Status: order.Refunded}, nil
 }
 
 func (a *orderAdmin) List(_ context.Context, f order.ListFilter) ([]order.Order, error) {
@@ -199,4 +211,93 @@ func TestAdminOrderPageWhenTheStoresFail(t *testing.T) {
 	requirePage(t, get(adminOrders(&orderAdmin{err: errBoom}, ledger{}, &eventLog{}), path), http.StatusInternalServerError)
 	requirePage(t, get(adminOrders(a, ledger{err: errBoom}, &eventLog{}), path), http.StatusInternalServerError)
 	requirePage(t, get(adminOrders(a, ledger{}, &eventLog{err: errBoom}), path), http.StatusInternalServerError)
+}
+
+// paidOrder is pending, paid.
+func paidOrder() order.Order {
+	o := pending
+	paidAt := deadline.Add(-time.Minute)
+	o.Status, o.ReceivedLamports, o.PaidAt = order.Paid, 10_000_000, &paidAt
+	return o
+}
+
+func TestAdminRefundsAnOrder(t *testing.T) {
+	o := paidOrder()
+	a := &orderAdmin{orders: []order.Order{o}}
+	w := post(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders/"+o.ID.String()+"/refund", url.Values{"note": {" Sent back on request. "}})
+
+	assert.Equal(t, http.StatusSeeOther, w.Code)
+	assert.Equal(t, "/admin/orders/"+o.ID.String(), w.Header().Get("Location"))
+	assert.Equal(t, []string{o.ID.String() + "  Sent back on request. "}, a.refunds, "the note as sent; the service trims it")
+}
+
+// A refund the order service refuses shows the order's page again with the reason, and the note
+// as typed.
+func TestAdminRefundShowsWhyItIsRefused(t *testing.T) {
+	tests := []struct {
+		err     error
+		status  int
+		problem string
+	}{
+		{order.ErrNoLatePayment, http.StatusConflict,
+			"An expired order can be refunded only after a payment arrived after its deadline, and none has."},
+		{fmt.Errorf("%w: refunded to refunded", order.ErrInvalidTransition), http.StatusConflict,
+			"This order cannot be refunded: it is refunded already, or it has received nothing."},
+		{order.ErrStaleState, http.StatusConflict, "The order changed while it was being refunded; look at it again."},
+		{&order.ValidationError{Field: "note", Reason: "is longer than 500 characters"}, http.StatusUnprocessableEntity,
+			"The note is longer than 500 characters."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.problem, func(t *testing.T) {
+			o := paidOrder()
+			a := &orderAdmin{orders: []order.Order{o}, refundErr: tt.err}
+			w := post(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders/"+o.ID.String()+"/refund", url.Values{"note": {"by hand"}})
+
+			body := requirePage(t, w, tt.status)
+			assert.Contains(t, body, `<p class="problem" role="alert">`+tt.problem+`</p>`)
+			assert.Contains(t, body, `>by hand</textarea>`)
+			assert.Contains(t, body, "<dd>paid</dd>", "the order's page")
+		})
+	}
+}
+
+func TestAdminRefundAnOrderThatDoesNotExist(t *testing.T) {
+	a := &orderAdmin{orders: []order.Order{pending}, refundErr: order.ErrNotFound}
+	mux := adminOrders(a, ledger{}, &eventLog{})
+	for _, id := range []string{"6ba7b810-9dad-41d1-80b4-00c04fd430c8", "not-a-uuid"} {
+		requirePage(t, post(mux, "/admin/orders/"+id+"/refund", url.Values{}), http.StatusNotFound)
+	}
+	assert.Len(t, a.refunds, 1, "a malformed id is not asked for")
+}
+
+func TestAdminRefundWhenTheStoreFails(t *testing.T) {
+	o := paidOrder()
+	a := &orderAdmin{orders: []order.Order{o}, refundErr: errBoom}
+	requirePage(t, post(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders/"+o.ID.String()+"/refund", url.Values{}), http.StatusInternalServerError)
+}
+
+func TestAdminRefundRefusesAFormItCannotRead(t *testing.T) {
+	o := paidOrder()
+	a := &orderAdmin{orders: []order.Order{o}}
+	form := url.Values{"note": {strings.Repeat("x", 9000)}}
+	requirePage(t, post(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders/"+o.ID.String()+"/refund", form), http.StatusBadRequest)
+	assert.Empty(t, a.refunds)
+}
+
+// The refund form is offered where the order service would refund the order: once it has
+// received a payment, on time or, for an expired one, late.
+func TestAdminOrderPageOffersARefund(t *testing.T) {
+	refunded, expired, late, underpaid, fulfilled := paidOrder(), pending, pending, pending, paidOrder()
+	refunded.Status, expired.Status, underpaid.Status, fulfilled.Status = order.Refunded, order.Expired, order.Underpaid, order.Fulfilled
+	late.Status, late.HasLatePayment = order.Expired, true
+	for _, tt := range []struct {
+		o     order.Order
+		offer bool
+	}{
+		{paidOrder(), true}, {underpaid, true}, {fulfilled, true}, {late, true},
+		{expired, false}, {pending, false}, {refunded, false},
+	} {
+		body := requirePage(t, get(adminOrders(&orderAdmin{orders: []order.Order{tt.o}}, ledger{}, &eventLog{}), "/admin/orders/"+tt.o.ID.String()), http.StatusOK)
+		assert.Equal(t, tt.offer, strings.Contains(body, `<form class="product-form" method="post" action="/admin/orders/`+tt.o.ID.String()+`/refund">`), tt.o.Status)
+	}
 }

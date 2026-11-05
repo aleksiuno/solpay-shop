@@ -22,6 +22,15 @@
 <dt>Refunded</dt><dd>{{utc .}}</dd>
 {{- end}}
 </dl>
+{{with .Problem}}<p class="problem" role="alert">{{.}}</p>{{end}}
+{{- if .Refundable}}
+<form class="product-form" method="post" action="/admin/orders/{{.ID}}/refund">
+<label for="note">Refund note (optional)</label>
+<textarea id="note" name="note" rows="2" maxlength="500">{{.Note}}</textarea>
+<button type="submit">Mark refunded</button>
+<small>The shop only records the refund; send the SOL back from the merchant wallet yourself.</small>
+</form>
+{{- end}}
 <h2>Payments</h2>
 <div class="table-scroll">
 <table class="list">

@@ -86,6 +86,7 @@ var adminPaths = []string{
 	"/admin/no-such-page",
 	"/admin/orders",
 	"/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
+	"/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund",
 	"/admin/products",
 	"/admin/products/new",
 	"/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
@@ -136,6 +137,7 @@ func TestAdminRoutesAreMounted(t *testing.T) {
 		{http.MethodPost, "/admin/", "GET, HEAD"},
 		{http.MethodDelete, "/admin/orders", "GET, HEAD"},
 		{http.MethodDelete, "/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "GET, HEAD"},
+		{http.MethodGet, "/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund", "POST"},
 		{http.MethodDelete, "/admin/products", "GET, HEAD, POST"},
 		{http.MethodDelete, "/admin/products/new", "GET, HEAD, POST"},
 		{http.MethodGet, "/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "POST"},
@@ -212,7 +214,10 @@ func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
 
 func TestCrossOriginUnsafeRequestsAreRefused(t *testing.T) {
 	h := newRouter()
-	for _, path := range []string{"/healthz", "/api/v1/admin/no-such-endpoint", "/admin/no-such-page"} {
+	for _, path := range []string{
+		"/healthz", "/api/v1/admin/no-such-endpoint", "/admin/no-such-page",
+		"/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund",
+	} {
 		w := request(h, http.MethodPost, path, crossSite, withAuth(adminUser, adminPass))
 		assert.Equal(t, http.StatusForbidden, w.Code, path)
 		assert.Equal(t, "forbidden", errorCode(t, w), path)

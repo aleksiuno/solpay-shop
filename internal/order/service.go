@@ -148,11 +148,13 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Order, error) {
 // An order can be refunded once it has received something: when it is underpaid, paid or
 // fulfilled, or expired with a late payment. Any other order gives an error wrapping
 // ErrInvalidTransition, an expired order without a late payment gives ErrNoLatePayment, and an
-// unknown id gives ErrNotFound. The note is trimmed of surrounding white space first; a note that
+// unknown id gives ErrNotFound. The note's CRLF line breaks become LF, and it is trimmed of
+// surrounding white space first; a note that
 // is then longer than 500 characters, or has a NUL or a byte that is not UTF-8, gives a
 // *ValidationError.
 func (s *Service) Refund(ctx context.Context, id uuid.UUID, note string) (Order, error) {
-	note = strings.TrimSpace(note)
+	// A browser sends a text area's line breaks as CRLF, but counts each as one character.
+	note = strings.TrimSpace(strings.ReplaceAll(note, "\r\n", "\n"))
 	if !utf8.ValidString(note) || strings.ContainsRune(note, 0) {
 		return Order{}, &ValidationError{"note", "must be valid UTF-8 text without NUL characters"}
 	}
