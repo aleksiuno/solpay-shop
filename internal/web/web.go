@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 	"uuid"
 
@@ -29,9 +31,12 @@ type Deps struct {
 	// ExpiryGrace is how long after its deadline the watcher still polls a pending order before it
 	// expires it, as payment.Config has it. An underpaid order's page reloads itself as long.
 	ExpiryGrace time.Duration
-	// ProductAdmin and ProductFiles serve the admin pages.
+	// ProductAdmin, ProductFiles, OrderAdmin, Ledger and EventLog serve the admin pages.
 	ProductAdmin ProductAdmin
 	ProductFiles FileLister
+	OrderAdmin   OrderAdmin
+	Ledger       Ledger
+	EventLog     EventLog
 	Log          *slog.Logger
 }
 
@@ -59,6 +64,16 @@ var assets embed.FS
 // funcs are the functions the templates may call.
 var funcs = template.FuncMap{
 	"sol": money.FormatSOL, // lamports as decimal SOL
+	"utc": func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 UTC") },
+	// json writes an event's data as one line of JSON. It leaves & and < as they are, since
+	// html/template escapes the text it is shown in.
+	"json": func(v any) (string, error) {
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		err := enc.Encode(v)
+		return strings.TrimSuffix(b.String(), "\n"), err
+	},
 }
 
 // site serves the web routes with its Deps and the parsed pages, by file name.
@@ -85,6 +100,7 @@ func parsePages() map[string]*template.Template {
 	pages := map[string]*template.Template{}
 	for _, name := range []string{
 		"home.html", "product.html", "order.html", "error.html", "admin_products.html", "admin_product_form.html",
+		"admin_orders.html", "admin_order.html",
 	} {
 		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
 	}

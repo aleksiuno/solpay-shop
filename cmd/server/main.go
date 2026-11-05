@@ -108,7 +108,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	}
 	defer files.Close()
 	products := product.NewService(db.NewProducts(pool), files)
-	events := audit.NewRecorder(db.NewEvents(pool), logger)
+	eventLog := db.NewEvents(pool)
+	events := audit.NewRecorder(eventLog, logger)
 	orders := order.NewService(db.NewOrders(pool, events), products, cfg.OrderTTL, solana.NewReference, now)
 	downloads := download.NewService(db.NewDownloads(pool, events), files, cfg.DownloadSecret, now)
 	chain, err := solana.New(cfg.SolanaRPCURL)
@@ -116,7 +117,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 		return err
 	}
 	watchCfg := payment.DefaultConfig(cfg.PollInterval)
-	watcher := payment.NewWatcher(chain, db.NewPayments(pool, events), events, cfg.MerchantAddress, watchCfg, now)
+	payments := db.NewPayments(pool, events)
+	watcher := payment.NewWatcher(chain, payments, events, cfg.MerchantAddress, watchCfg, now)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
@@ -150,7 +152,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 
 	site := web.Deps{
 		Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress, Now: now,
-		ExpiryGrace: watchCfg.ExpiryGrace, ProductAdmin: products, ProductFiles: files, Log: logger,
+		ExpiryGrace: watchCfg.ExpiryGrace, ProductAdmin: products, ProductFiles: files, OrderAdmin: orders,
+		Ledger: payments, EventLog: eventLog, Log: logger,
 	}
 	api := httpapi.Deps{
 		DB: pool, Products: products, Orders: orders, Downloads: downloads, ProductAdmin: products,

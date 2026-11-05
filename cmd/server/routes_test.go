@@ -84,6 +84,8 @@ func errorCode(t *testing.T, w *httptest.ResponseRecorder) string {
 var adminPaths = []string{
 	"/admin/",
 	"/admin/no-such-page",
+	"/admin/orders",
+	"/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
 	"/admin/products",
 	"/admin/products/new",
 	"/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
@@ -131,6 +133,9 @@ func TestAdminRoutesForbidFraming(t *testing.T) {
 func TestAdminRoutesAreMounted(t *testing.T) {
 	h := newRouter()
 	tests := []struct{ method, path, allow string }{
+		{http.MethodPost, "/admin/", "GET, HEAD"},
+		{http.MethodDelete, "/admin/orders", "GET, HEAD"},
+		{http.MethodDelete, "/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "GET, HEAD"},
 		{http.MethodDelete, "/admin/products", "GET, HEAD, POST"},
 		{http.MethodDelete, "/admin/products/new", "GET, HEAD, POST"},
 		{http.MethodGet, "/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "POST"},
