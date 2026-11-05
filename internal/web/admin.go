@@ -7,16 +7,19 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"uuid"
 
 	"github.com/aleksiuno/solpay-shop/internal/money"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
-// ProductAdmin lists and creates products for the admin pages. *product.Service
+// ProductAdmin lists, finds, creates and updates products for the admin pages. *product.Service
 // is one.
 type ProductAdmin interface {
 	List(ctx context.Context, activeOnly bool) ([]product.Product, error)
+	GetByID(ctx context.Context, id uuid.UUID) (product.Product, error)
 	Create(ctx context.Context, p product.Product) (product.Product, error)
+	Update(ctx context.Context, p product.Product) (product.Product, error)
 }
 
 // FileLister lists the files that a product can sell. *download.Files is one.
@@ -33,6 +36,8 @@ func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /admin/products", s.adminProducts)
 	mux.HandleFunc("GET /admin/products/new", s.newProduct)
 	mux.HandleFunc("POST /admin/products", s.createProduct)
+	mux.HandleFunc("GET /admin/products/{id}/edit", s.editProduct)
+	mux.HandleFunc("POST /admin/products/{id}", s.updateProduct)
 }
 
 // productForm is what the product form shows: the fields as they stand, the files to choose
@@ -65,11 +70,44 @@ func (s site) newProduct(w http.ResponseWriter, r *http.Request) {
 	s.showProductForm(w, r, http.StatusOK, productForm{Heading: "New product", Action: "/admin/products", Active: true})
 }
 
+// editProduct shows the form for the product whose id is in the path, filled in.
+func (s site) editProduct(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, product.ErrNotFound)
+		return
+	}
+	p, err := s.ProductAdmin.GetByID(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.showProductForm(w, r, http.StatusOK, productForm{
+		Heading: "Edit product", Action: "/admin/products/" + p.ID.String(),
+		Slug: p.Slug, Title: p.Title, Description: p.Description, Price: money.FormatSOL(p.PriceLamports),
+		FileName: p.FileName, Active: p.Active,
+	})
+}
+
 // createProduct stores a new product from the form and sends the browser back to the list with a
 // 303. A field that is not acceptable shows the form again with the problem, 422; a slug that
 // another product has, 409.
 func (s site) createProduct(w http.ResponseWriter, r *http.Request) {
 	s.saveProduct(w, r, productForm{Heading: "New product", Action: "/admin/products"}, s.ProductAdmin.Create)
+}
+
+// updateProduct stores the form over the product whose id is in the path, as createProduct does.
+func (s site) updateProduct(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, product.ErrNotFound)
+		return
+	}
+	form := productForm{Heading: "Edit product", Action: "/admin/products/" + id.String()}
+	s.saveProduct(w, r, form, func(ctx context.Context, p product.Product) (product.Product, error) {
+		p.ID = id
+		return s.ProductAdmin.Update(ctx, p)
+	})
 }
 
 // saveProduct reads the product form into form, stores it with save, and answers as
