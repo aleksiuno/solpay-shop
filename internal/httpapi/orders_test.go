@@ -52,6 +52,19 @@ func (s *orderService) Get(_ context.Context, id uuid.UUID) (order.Order, error)
 	return s.order, nil
 }
 
+// links gives the link it holds for an order, when ok is set, and notes the orders it is asked
+// about.
+type links struct {
+	link  string
+	ok    bool
+	asked []order.Order
+}
+
+func (l *links) Link(o order.Order) (string, bool) {
+	l.asked = append(l.asked, o)
+	return l.link, l.ok
+}
+
 var (
 	merchant  = solanatest.Key("merchant")
 	reference = solanatest.Key("reference")
@@ -78,11 +91,19 @@ var pendingJSON = `{
 	"payment": {"recipient": "` + merchant + `", "reference": "` + reference + `",
 		"url": "solana:` + merchant + `?amount=0.01&reference=` + reference +
 	`&label=solpay-shop%20%28devnet%29&message=Go%20payments%20checklist%20%282%20licences%29"},
-	"expires_at": "2026-11-03T12:15:00Z", "paid_at": null, "created_at": "2026-11-03T12:00:00Z"}`
+	"expires_at": "2026-11-03T12:15:00Z", "paid_at": null, "download_url": null,
+	"created_at": "2026-11-03T12:00:00Z"}`
 
-// newOrdersAPI returns the public routes over s, with the clock at now.
+// newOrdersAPI returns the public routes over s, with the clock at now and no download links.
 func newOrdersAPI(s *orderService) (*http.ServeMux, *bytes.Buffer) {
-	return newAPI(httpapi.Deps{Products: &catalogue{}, Orders: s, Merchant: merchant, Now: func() time.Time { return now }})
+	return newOrdersAPIWithLinks(s, &links{})
+}
+
+// newOrdersAPIWithLinks is newOrdersAPI with download links from l.
+func newOrdersAPIWithLinks(s *orderService, l *links) (*http.ServeMux, *bytes.Buffer) {
+	return newAPI(httpapi.Deps{
+		Products: &catalogue{}, Orders: s, Downloads: l, Merchant: merchant, Now: func() time.Time { return now },
+	})
 }
 
 func post(h http.Handler, path, body string) *httptest.ResponseRecorder {
@@ -237,7 +258,8 @@ func TestGetUnderpaidOrder(t *testing.T) {
 		"payment": {"recipient": "`+merchant+`", "reference": "`+reference+`",
 			"url": "solana:`+merchant+`?amount=0.006&reference=`+reference+
 		`&label=solpay-shop%20%28devnet%29&message=Go%20payments%20checklist%20%282%20licences%29"},
-		"expires_at": "2026-11-03T12:15:00Z", "paid_at": null, "created_at": "2026-11-03T12:00:00Z"}`, w.Body.String())
+		"expires_at": "2026-11-03T12:15:00Z", "paid_at": null, "download_url": null,
+		"created_at": "2026-11-03T12:00:00Z"}`, w.Body.String())
 }
 
 // The payment block is there only while the order can be paid: pending or underpaid, and not past
@@ -294,4 +316,26 @@ func TestOrderShowsWhenItWasPaid(t *testing.T) {
 
 	assert.Contains(t, w.Body.String(), `"paid_at":"2026-11-03T12:01:30Z"`)
 	assert.Contains(t, w.Body.String(), `"remaining_lamports":0`)
+}
+
+// The download link is the one the download service gives for the order, and null when it gives
+// none.
+func TestOrderDownloadLink(t *testing.T) {
+	o := pending
+	paidAt := now.Add(-time.Minute)
+	o.Status, o.ReceivedLamports, o.PaidAt = order.Paid, 10_000_000, &paidAt
+	const link = "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e?exp=1793535300&sig=c2lnbmF0dXJl"
+	for _, ok := range []bool{true, false} {
+		l := &links{link: link, ok: ok}
+		mux, _ := newOrdersAPIWithLinks(&orderService{order: o}, l)
+		w := get(mux, "/api/v1/orders/"+o.ID.String())
+		require.Equal(t, http.StatusOK, w.Code)
+
+		if ok {
+			assert.Contains(t, w.Body.String(), `"download_url":"`+link+`"`)
+		} else {
+			assert.Contains(t, w.Body.String(), `"download_url":null`, "there, and null")
+		}
+		assert.Equal(t, []order.Order{o}, l.asked)
+	}
 }
