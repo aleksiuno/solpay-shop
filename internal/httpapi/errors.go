@@ -45,8 +45,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	h.Set("Content-Type", "application/json")
 	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
+	// "&" stays as it is, not "\u0026", so that a URL in the answer can be copied from it. The
+	// headers keep a browser from reading the answer as HTML.
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
 	// An error here means the client has gone; there is no one left to tell.
-	_ = json.NewEncoder(w).Encode(v)
+	_ = enc.Encode(v)
 }
 
 // fail answers err, which a service returned, with the envelope that fits it. An error it does not
