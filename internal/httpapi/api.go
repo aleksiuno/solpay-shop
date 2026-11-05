@@ -17,9 +17,11 @@ type Deps struct {
 	Products  Products
 	Orders    Orders
 	Downloads Downloads
-	// ProductAdmin and OrderAdmin serve the admin API.
+	// ProductAdmin, OrderAdmin, Ledger and EventLog serve the admin API.
 	ProductAdmin ProductAdmin
 	OrderAdmin   OrderAdmin
+	Ledger       Ledger
+	EventLog     EventLog
 	Merchant     string           // the address that receives payments
 	Now          func() time.Time // the clock that decides whether an order can still be paid
 	Log          *slog.Logger
