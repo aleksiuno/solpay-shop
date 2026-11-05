@@ -9,3 +9,8 @@ RETURNING signature;
 -- name: KnownSignatures :many
 -- Returns those of the signatures that are already in the ledger.
 SELECT signature FROM payments WHERE signature = ANY(@signatures::text[]);
+
+-- name: ListPaymentsByOrder :many
+-- Returns the order's ledger rows in the order of their slots, the first seen first among rows of
+-- one slot.
+SELECT * FROM payments WHERE order_id = @order_id ORDER BY slot, created_at, signature;

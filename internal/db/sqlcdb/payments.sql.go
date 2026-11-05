@@ -70,3 +70,38 @@ func (q *Queries) KnownSignatures(ctx context.Context, signatures []string) ([]s
 	}
 	return items, nil
 }
+
+const listPaymentsByOrder = `-- name: ListPaymentsByOrder :many
+SELECT signature, order_id, outcome, lamports, slot, block_time, reason, created_at FROM payments WHERE order_id = $1 ORDER BY slot, created_at, signature
+`
+
+// Returns the order's ledger rows in the order of their slots, the first seen first among rows of
+// one slot.
+func (q *Queries) ListPaymentsByOrder(ctx context.Context, orderID uuid.UUID) ([]Payment, error) {
+	rows, err := q.db.Query(ctx, listPaymentsByOrder, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Payment{}
+	for rows.Next() {
+		var i Payment
+		if err := rows.Scan(
+			&i.Signature,
+			&i.OrderID,
+			&i.Outcome,
+			&i.Lamports,
+			&i.Slot,
+			&i.BlockTime,
+			&i.Reason,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
