@@ -43,6 +43,13 @@ type Store interface {
 	// Apply passes the order, read under a lock, to decide, and stores the decision with its
 	// ledger row unless the ledger already has the signature. It reports whether it stored it.
 	Apply(ctx context.Context, orderID uuid.UUID, decide func(order.Order) (Decision, error)) (bool, error)
+	// Expire moves the order from pending to expired if its deadline is before cutoff, with an
+	// order.expired event that names the unresolved signatures, and reports whether it did. Any
+	// other order is left as it is.
+	Expire(ctx context.Context, orderID uuid.UUID, cutoff time.Time, unresolved []string) (bool, error)
+	// StopPolling ends the polling of every underpaid or expired order whose deadline is at or
+	// before lateCutoff, and returns how many orders it changed.
+	StopPolling(ctx context.Context, lateCutoff time.Time) (int64, error)
 }
 
 // Config sets how the watcher polls. DefaultConfig gives the shop's settings.
@@ -56,6 +63,12 @@ type Config struct {
 	// LateWindow is how long after its deadline an underpaid or expired order is still polled, so
 	// that a late payment is seen and the order can be refunded.
 	LateWindow time.Duration
+	// ExpiryGrace is how long after its deadline a pending order is still polled before it is
+	// expired, so that a payment made just before the deadline, which the node lists a little
+	// later, still pays it.
+	ExpiryGrace time.Duration
+	// LateCadence is how often an order is polled after its deadline once it is no longer pending.
+	LateCadence time.Duration
 	// RPCTimeout bounds each call to the node, the wait for its rate limiter included.
 	RPCTimeout time.Duration
 }
@@ -67,6 +80,8 @@ func DefaultConfig(pollInterval time.Duration) Config {
 		Batch:          8,
 		SignatureLimit: 100,
 		LateWindow:     time.Hour,
+		ExpiryGrace:    2 * time.Minute,
+		LateCadence:    time.Minute,
 		RPCTimeout:     10 * time.Second,
 	}
 }
@@ -94,16 +109,27 @@ func NewWatcher(chain Chain, store Store, rec *audit.Recorder, merchant string, 
 // that first and polls nothing unless it does. A node that serves another cluster gives
 // solana.ErrNotDevnet, which is returned without being recorded.
 //
-// Each order it polls is next due PollInterval later, even when the poll fails, so an order whose
-// poll keeps failing waits behind the others instead of holding up the batch.
+// A pending order is expired by its first poll more than ExpiryGrace after its deadline that
+// succeeds and finds no transaction that the node lists but cannot return yet, since one of those
+// may pay the order on time. Once the order's late window is over, such transactions no longer
+// hold the expiry back, and its event names them; nor does a listing of the order's reference that
+// fails for good (solana.ErrPermanent). Any other failed poll holds the expiry back until a poll
+// succeeds.
+//
+// An order is next due PollInterval later if it was polled at or before its deadline, or was
+// pending when the tick took it and the tick did not expire it; otherwise LateCadence later, until
+// its late window ends, and then never. An order gets its next poll time even when its poll fails,
+// so one whose poll keeps failing waits behind the others instead of holding up the batch. Each
+// tick also ends the polling of every underpaid or expired order whose late window is over, which
+// WatchSet no longer returns, in case its last poll did not run in time.
 //
 // A failed call to the node is recorded as rpc.timeout if it ran out of time, or else as rpc.error,
 // and ends the tick with its error: the next call would most likely fail too, so the caller should
 // back off. A permanent failure (solana.ErrPermanent) belongs to one order, so it is recorded as
 // rpc.error and the tick goes on to the next order. Any other failure is the shop's own, such as
-// a database error, and is recorded as watcher.error: in an order's poll, the tick goes on; in
-// finding the due orders, it ends. Once ctx has ended, a failure ends the tick and is not
-// recorded. Transactions that the node lists but cannot return are dealt with in the poll.
+// a database error, and is recorded as watcher.error; the tick goes on, unless it could not find
+// the due orders. Once ctx has ended, a failure ends the tick and is not recorded. Transactions
+// that the node lists but cannot return are dealt with in the poll.
 func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 	if !w.devnet {
 		if err := w.rpc(ctx, getGenesisHash, "", w.chain.CheckDevnet); err != nil {
@@ -115,19 +141,32 @@ func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 		w.devnet = true
 	}
 	now := w.now()
-	orders, err := w.store.WatchSet(ctx, now, now.Add(-w.cfg.LateWindow), w.cfg.Batch)
+	lateCutoff := now.Add(-w.cfg.LateWindow)
+	if _, err := w.store.StopPolling(ctx, lateCutoff); err != nil && w.fail(ctx, nil, err) {
+		return 0, err
+	}
+	orders, err := w.store.WatchSet(ctx, now, lateCutoff, w.cfg.Batch)
 	if err != nil {
 		w.fail(ctx, nil, err)
 		return 0, err
 	}
 	for i, o := range orders {
-		errs := []error{w.poll(ctx, o, now), w.store.MarkPolled(ctx, o.ID, new(now.Add(w.cfg.PollInterval)))}
+		var errs []error
 		end := false
-		for _, err := range errs {
+		record := func(err error) {
 			if err != nil {
+				errs = append(errs, err)
 				end = w.fail(ctx, &o.ID, fmt.Errorf("poll order %s: %w", o.ID, err)) || end
 			}
 		}
+		unresolved, pollErr := w.poll(ctx, o, now)
+		record(pollErr)
+		expired, err := w.expire(ctx, o, now, unresolved, pollErr)
+		record(err)
+		if expired {
+			o.Status = order.Expired
+		}
+		record(w.store.MarkPolled(ctx, o.ID, w.nextPoll(o, now)))
 		if end {
 			return i + 1, fmt.Errorf("poll order %s: %w", o.ID, errors.Join(errs...))
 		}
@@ -165,17 +204,29 @@ func (w *Watcher) fail(ctx context.Context, orderID *uuid.UUID, err error) bool 
 	return ok && !errors.Is(re.err, solana.ErrPermanent)
 }
 
+// nextPoll returns when o, polled at now, is next due for a poll, or nil for never. See RunOnce.
+func (w *Watcher) nextPoll(o order.Order, now time.Time) *time.Time {
+	if o.Status == order.Pending || !now.After(o.ExpiresAt) {
+		return new(now.Add(w.cfg.PollInterval))
+	}
+	next := now.Add(w.cfg.LateCadence)
+	if !next.Before(o.ExpiresAt.Add(w.cfg.LateWindow)) {
+		return nil // WatchSet would not return it then
+	}
+	return &next
+}
+
 // poll asks the node for the transactions that list o's reference, and applies each one that the
-// ledger does not have yet, oldest first. One that the node lists but cannot return yet is left for
-// the next poll.
-func (w *Watcher) poll(ctx context.Context, o order.Order, now time.Time) error {
+// ledger does not have yet, oldest first. It returns those that the node lists but cannot return
+// yet, oldest first; they are left for the next poll.
+func (w *Watcher) poll(ctx context.Context, o order.Order, now time.Time) ([]string, error) {
 	var listed []solana.SignatureInfo
 	err := w.rpc(ctx, getSignaturesForAddress, "", func(ctx context.Context) (err error) {
 		listed, err = w.chain.Signatures(ctx, o.Reference, w.cfg.SignatureLimit)
 		return err
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sigs := make([]string, len(listed))
 	for i, s := range listed {
@@ -183,24 +234,43 @@ func (w *Watcher) poll(ctx context.Context, o order.Order, now time.Time) error 
 	}
 	known, err := w.store.KnownSignatures(ctx, sigs)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var unresolved []string
 	for _, s := range slices.Backward(listed) {
 		if known[s.Signature] {
 			continue
 		}
 		c, err := w.candidate(ctx, o, s)
 		if errors.Is(err, solana.ErrNotFound) {
+			unresolved = append(unresolved, s.Signature)
 			continue
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := w.store.Apply(ctx, o.ID, func(cur order.Order) (Decision, error) { return Decide(cur, c, now) }); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return unresolved, nil
+}
+
+// expire expires o, polled at now, if it is due to be, and reports whether it did. unresolved and
+// pollErr are what the poll returned. See RunOnce.
+func (w *Watcher) expire(ctx context.Context, o order.Order, now time.Time, unresolved []string, pollErr error) (bool, error) {
+	// o is the order as WatchSet read it. If the poll's payments moved it on, Expire leaves it alone.
+	if o.Status != order.Pending || !now.After(o.ExpiresAt.Add(w.cfg.ExpiryGrace)) {
+		return false, nil
+	}
+	permanent := errors.Is(pollErr, solana.ErrPermanent)
+	if pollErr != nil && !permanent {
+		return false, nil // what the poll did not read or apply may pay o on time
+	}
+	if (permanent || len(unresolved) > 0) && now.Before(o.ExpiresAt.Add(w.cfg.LateWindow)) {
+		return false, nil
+	}
+	return w.store.Expire(ctx, o.ID, now.Add(-w.cfg.ExpiryGrace), unresolved)
 }
 
 // candidate returns the transaction s with Verify's verdict on it as a payment to o. A failed

@@ -14,12 +14,13 @@ import (
 // memStore keeps orders with their next poll times, the payment ledger and the events in memory,
 // by the rules that db.Payments follows, and it is the event store of the watcher's Recorder too.
 // Every order id it is given must be one it holds. fail makes the next call of a method, by name,
-// fail. It is not safe for concurrent use.
+// fail, and calls counts the calls of each method. It is not safe for concurrent use.
 type memStore struct {
 	orders []*polled // in the order they were added
 	ledger map[string]payment.Payment
 	events []audit.Event
 	fail   map[string]error
+	calls  map[string]int
 }
 
 // polled is an order and when it is next due for a poll; nil means never.
@@ -29,7 +30,7 @@ type polled struct {
 }
 
 func newMemStore() *memStore {
-	return &memStore{ledger: map[string]payment.Payment{}, fail: map[string]error{}}
+	return &memStore{ledger: map[string]payment.Payment{}, fail: map[string]error{}, calls: map[string]int{}}
 }
 
 // add stores o, due for a poll at its creation time, as an order is created.
@@ -46,8 +47,9 @@ func (s *memStore) find(id uuid.UUID) *polled {
 	return s.orders[slices.IndexFunc(s.orders, func(p *polled) bool { return p.ID == id })]
 }
 
-// failed returns the error set for the next call of method, once.
+// failed counts a call of method and returns the error set for its next call, once.
 func (s *memStore) failed(method string) error {
+	s.calls[method]++
 	err := s.fail[method]
 	delete(s.fail, method)
 	return err
@@ -123,6 +125,37 @@ func (s *memStore) Apply(_ context.Context, id uuid.UUID, decide func(order.Orde
 	p.Status, p.ReceivedLamports, p.PaidAt = d.Status, d.Received, d.PaidAt
 	s.events = append(s.events, d.Events...)
 	return true, nil
+}
+
+func (s *memStore) Expire(_ context.Context, id uuid.UUID, cutoff time.Time, unresolved []string) (bool, error) {
+	if err := s.failed("Expire"); err != nil {
+		return false, err
+	}
+	p := s.find(id)
+	if p.Status != order.Pending || !p.ExpiresAt.Before(cutoff) {
+		return false, nil
+	}
+	p.Status = order.Expired
+	data := map[string]any{"expires_at": p.ExpiresAt.UTC().Format(time.RFC3339Nano)}
+	if len(unresolved) > 0 {
+		data["unresolved_signatures"] = unresolved
+	}
+	s.events = append(s.events, audit.Event{OrderID: &p.ID, Kind: audit.OrderExpired, Message: "order expired", Data: data})
+	return true, nil
+}
+
+func (s *memStore) StopPolling(_ context.Context, lateCutoff time.Time) (int64, error) {
+	if err := s.failed("StopPolling"); err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, p := range s.orders {
+		if p.next != nil && (p.Status == order.Underpaid || p.Status == order.Expired) && !p.ExpiresAt.After(lateCutoff) {
+			p.next = nil
+			n++
+		}
+	}
+	return n, nil
 }
 
 // ofKind returns the events of kind k, in the order they were stored.
