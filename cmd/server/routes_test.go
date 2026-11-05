@@ -51,7 +51,7 @@ var cfg = config.Config{AdminUser: adminUser, AdminPass: adminPass}
 func newRouter() http.Handler {
 	log := slog.New(slog.DiscardHandler)
 	downloads := download.NewService(nil, nil, []byte("test-only-download-secret-0123456789"), now)
-	return routes(cfg, log, web.Deps{Downloads: downloads, Log: log},
+	return routes(cfg, log, web.Deps{Products: catalogue{}, Downloads: downloads, Log: log},
 		httpapi.Deps{DB: pinger{}, Products: catalogue{}, Log: log})
 }
 
@@ -128,6 +128,10 @@ func TestPublicRoutesNeedNoCredentials(t *testing.T) {
 	w = request(h, http.MethodGet, "/api/v1/products")
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.JSONEq(t, `{"products": []}`, w.Body.String())
+
+	w = request(h, http.MethodGet, "/")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Nothing is for sale yet.", "the shop's home page")
 }
 
 // A cross-site form cannot place an order: the refusal comes before the order service, which

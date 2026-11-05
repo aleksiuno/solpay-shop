@@ -1,0 +1,25 @@
+:root {
+  --ink: #1d1f24;
+  --muted: #5d636e;
+  --line: #d9dce1;
+  --accent: #5b3fd6;
+  --warn-bg: #fff4d6;
+  --warn-line: #e3b341;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: #fafafa;
+}
+header.site, main, footer.site { max-width: 42rem; margin: 0 auto; padding: 1rem; }
+header.site { display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; color: var(--ink); text-decoration: none; }
+.tag { font-size: 0.75rem; padding: 0.1rem 0.4rem; border-radius: 0.25rem; background: var(--warn-bg); border: 1px solid var(--warn-line); }
+footer.site { color: var(--muted); font-size: 0.875rem; border-top: 1px solid var(--line); }
+a { color: var(--accent); }
+h1 { font-size: 1.6rem; margin: 0.5rem 0 1rem; }
+h2 { font-size: 1.2rem; margin: 0 0 0.25rem; }
+.product { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+.price { color: var(--muted); }

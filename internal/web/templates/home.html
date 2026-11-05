@@ -1,0 +1,12 @@
+{{define "content"}}
+<h1>Products</h1>
+{{range .}}
+<article class="product">
+<h2><a href="/p/{{.Slug}}">{{.Title}}</a></h2>
+<p>{{.Description}}</p>
+<p class="price">{{sol .PriceLamports}} SOL</p>
+</article>
+{{else}}
+<p>Nothing is for sale yet.</p>
+{{end}}
+{{end}}

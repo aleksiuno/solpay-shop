@@ -1,12 +1,10 @@
 package web_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,25 +63,11 @@ func (d *downloads) Open(_ context.Context, id uuid.UUID, exp, sig string, fulfi
 	return download.File{Name: "go-payments-checklist.md", ModTime: modTime, Content: d.content}, nil
 }
 
-// newSite returns a mux with the web routes over d, logging to the returned buffer.
-func newSite(d web.Downloads) (*http.ServeMux, *bytes.Buffer) {
-	var buf bytes.Buffer
-	mux := http.NewServeMux()
-	web.Register(mux, web.Deps{Downloads: d, Log: slog.New(slog.NewJSONHandler(&buf, nil))})
-	return mux, &buf
-}
-
-func serve(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	return w
-}
-
 const link = "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e?exp=1793534400&sig=c2lnbmF0dXJl"
 
 func TestDownloadSendsTheFileAsAnAttachment(t *testing.T) {
 	d := &downloads{}
-	mux, buf := newSite(d)
+	mux, buf := newSite(web.Deps{Downloads: d})
 	w := serve(mux, httptest.NewRequest(http.MethodGet, link, nil))
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -99,7 +83,7 @@ func TestDownloadSendsTheFileAsAnAttachment(t *testing.T) {
 
 func TestDownloadHeadDoesNotFulfil(t *testing.T) {
 	d := &downloads{}
-	mux, _ := newSite(d)
+	mux, _ := newSite(web.Deps{Downloads: d})
 	w := serve(mux, httptest.NewRequest(http.MethodHead, link, nil))
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -110,7 +94,7 @@ func TestDownloadHeadDoesNotFulfil(t *testing.T) {
 }
 
 func TestDownloadAnswersARange(t *testing.T) {
-	mux, _ := newSite(&downloads{})
+	mux, _ := newSite(web.Deps{Downloads: &downloads{}})
 	r := httptest.NewRequest(http.MethodGet, link, nil)
 	r.Header.Set("Range", "bytes=4-8")
 	w := serve(mux, r)
@@ -137,7 +121,7 @@ func TestDownloadRefusals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux, buf := newSite(&downloads{err: tt.err})
+			mux, buf := newSite(web.Deps{Downloads: &downloads{err: tt.err}})
 			w := serve(mux, httptest.NewRequest(http.MethodGet, link, nil))
 
 			assert.Equal(t, tt.status, w.Code)
@@ -165,7 +149,7 @@ func TestDownloadRefusals(t *testing.T) {
 func TestDownloadRefusesAPathThatIsNotAnOrderID(t *testing.T) {
 	for _, id := range []string{"not-a-uuid", strings.ToUpper(orderID.String()), "{" + orderID.String() + "}"} {
 		d := &downloads{}
-		mux, _ := newSite(d)
+		mux, _ := newSite(web.Deps{Downloads: d})
 		w := serve(mux, httptest.NewRequest(http.MethodGet, "/d/"+id+"?exp=1793534400&sig=c2lnbmF0dXJl", nil))
 
 		assert.Equal(t, http.StatusForbidden, w.Code, id)
@@ -176,7 +160,7 @@ func TestDownloadRefusesAPathThatIsNotAnOrderID(t *testing.T) {
 }
 
 func TestDownloadWhenTheRequestIsCanceled(t *testing.T) {
-	mux, buf := newSite(&downloads{err: context.Canceled})
+	mux, buf := newSite(web.Deps{Downloads: &downloads{err: context.Canceled}})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	w := serve(mux, httptest.NewRequestWithContext(ctx, http.MethodGet, link, nil))
@@ -218,7 +202,7 @@ func TestDownloadByALinkFromTheService(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	st := &store{order: order.Order{ID: orderID, Status: order.Paid}}
 	svc := download.NewService(st, files, []byte(strings.Repeat("test-only-secret-", 2)), func() time.Time { return now })
-	mux, _ := newSite(svc)
+	mux, _ := newSite(web.Deps{Downloads: svc})
 
 	link, ok := svc.Link(st.order)
 	require.True(t, ok)
