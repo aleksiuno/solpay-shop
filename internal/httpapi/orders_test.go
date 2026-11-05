@@ -183,6 +183,7 @@ func TestGetOrder(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 	assert.JSONEq(t, pendingJSON, w.Body.String())
+	assert.Contains(t, w.Body.String(), "&reference="+reference, `"&" as it is, so the URL can be copied`)
 }
 
 func TestGetOrderThatDoesNotExist(t *testing.T) {
