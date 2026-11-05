@@ -86,6 +86,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, payment.Config{
 		PollInterval: 7 * time.Second, Batch: 8, SignatureLimit: 100, LateWindow: time.Hour,
 		ExpiryGrace: 2 * time.Minute, LateCadence: time.Minute, RPCTimeout: 10 * time.Second,
+		MaxBackoff: time.Minute, RateLimitBackoff: 15 * time.Second,
 	}, payment.DefaultConfig(7*time.Second))
 }
 
@@ -514,7 +515,7 @@ func TestWatcherExpiresAnUnpaidOrder(t *testing.T) {
 
 	r.tick(graceEnd)
 	require.Equal(t, order.Pending, r.store.get(o.ID).Status, "the grace's last instant")
-	assert.Zero(t, r.store.calls["Expire"], "the store is not asked in the grace")
+	assert.Zero(t, r.store.called("Expire"), "the store is not asked in the grace")
 	now := graceEnd.Add(cfg.PollInterval)
 	r.tick(now)
 	got := r.store.get(o.ID)
@@ -540,7 +541,7 @@ func TestWatcherRecordsAPaymentAfterExpiry(t *testing.T) {
 	assert.Equal(t, order.Expired, r.store.get(o.ID).Status)
 	assert.Equal(t, payment.Late, r.store.ledger["sig-1"].Outcome)
 	assert.Equal(t, []audit.Kind{audit.OrderExpired, audit.PaymentSeen, audit.PaymentLate}, r.store.kinds(o.ID))
-	assert.Equal(t, 1, r.store.calls["Expire"], "the store is not asked to expire it again")
+	assert.Equal(t, 1, r.store.called("Expire"), "the store is not asked to expire it again")
 }
 
 // Only a transaction that the node lists but cannot return yet holds the expiry back. A rejected

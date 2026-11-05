@@ -3,6 +3,7 @@ package payment_test
 import (
 	"context"
 	"slices"
+	"sync"
 	"time"
 	"uuid"
 
@@ -14,13 +15,16 @@ import (
 // memStore keeps orders with their next poll times, the payment ledger and the events in memory,
 // by the rules that db.Payments follows, and it is the event store of the watcher's Recorder too.
 // Every order id it is given must be one it holds. fail makes the next call of a method, by name,
-// fail, and calls counts the calls of each method. It is not safe for concurrent use.
+// fail, and called counts the calls of a method. It is not safe for concurrent use, except that
+// called may be read while a watcher runs.
 type memStore struct {
 	orders []*polled // in the order they were added
 	ledger map[string]payment.Payment
 	events []audit.Event
 	fail   map[string]error
-	calls  map[string]int
+
+	mu    sync.Mutex
+	calls map[string]int // by method
 }
 
 // polled is an order and when it is next due for a poll; nil means never.
@@ -49,13 +53,26 @@ func (s *memStore) find(id uuid.UUID) *polled {
 
 // failed counts a call of method and returns the error set for its next call, once.
 func (s *memStore) failed(method string) error {
+	s.mu.Lock()
 	s.calls[method]++
+	s.mu.Unlock()
 	err := s.fail[method]
 	delete(s.fail, method)
 	return err
 }
 
-func (s *memStore) InsertEvents(_ context.Context, evs ...audit.Event) error {
+// called returns how many times method has been called.
+func (s *memStore) called(method string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[method]
+}
+
+// InsertEvents fails once ctx has ended, as a database does.
+func (s *memStore) InsertEvents(ctx context.Context, evs ...audit.Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.events = append(s.events, evs...)
 	return nil
 }

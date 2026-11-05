@@ -54,7 +54,7 @@ type Store interface {
 
 // Config sets how the watcher polls. DefaultConfig gives the shop's settings.
 type Config struct {
-	// PollInterval is how often an order is polled.
+	// PollInterval is how often an order is polled while it is pending or before its deadline.
 	PollInterval time.Duration
 	// Batch is the most orders one tick polls.
 	Batch int
@@ -71,23 +71,30 @@ type Config struct {
 	LateCadence time.Duration
 	// RPCTimeout bounds each call to the node, the wait for its rate limiter included.
 	RPCTimeout time.Duration
+	// MaxBackoff is the longest Run waits after failed ticks.
+	MaxBackoff time.Duration
+	// RateLimitBackoff is the least Run waits after a tick that the node rate-limited.
+	RateLimitBackoff time.Duration
 }
 
 // DefaultConfig returns the shop's watcher settings, polling every pollInterval.
 func DefaultConfig(pollInterval time.Duration) Config {
 	return Config{
-		PollInterval:   pollInterval,
-		Batch:          8,
-		SignatureLimit: 100,
-		LateWindow:     time.Hour,
-		ExpiryGrace:    2 * time.Minute,
-		LateCadence:    time.Minute,
-		RPCTimeout:     10 * time.Second,
+		PollInterval:     pollInterval,
+		Batch:            8,
+		SignatureLimit:   100,
+		LateWindow:       time.Hour,
+		ExpiryGrace:      2 * time.Minute,
+		LateCadence:      time.Minute,
+		RPCTimeout:       10 * time.Second,
+		MaxBackoff:       time.Minute,
+		RateLimitBackoff: 15 * time.Second,
 	}
 }
 
 // Watcher finds the payments for orders by asking the RPC node for the transactions that list each
-// order's reference. RunOnce is one round of it. A Watcher is not safe for concurrent use.
+// order's reference. Run polls until it is stopped, and RunOnce is one round of it. A Watcher is
+// not safe for concurrent use.
 type Watcher struct {
 	chain    Chain
 	store    Store
@@ -95,13 +102,76 @@ type Watcher struct {
 	merchant string
 	cfg      Config
 	now      func() time.Time
-	devnet   bool // the node has been found to serve devnet
+	devnet   bool      // the node has been found to serve devnet
+	tickAt   time.Time // by now, when the last tick to poll began polling
 }
 
 // NewWatcher returns a Watcher that reads chain, keeps its state in store, records what goes
 // wrong with rec and looks for payments to merchant. now is its clock.
 func NewWatcher(chain Chain, store Store, rec *audit.Recorder, merchant string, cfg Config, now func() time.Time) *Watcher {
 	return &Watcher{chain: chain, store: store, rec: rec, merchant: merchant, cfg: cfg, now: now}
+}
+
+// Run runs ticks of RunOnce until ctx ends, and then returns nil. It records watcher.started when
+// it begins and watcher.stopped when it returns, the latter even though ctx has ended.
+//
+// A tick starts only when the one before has ended. After a tick that polled a full batch, the
+// next starts at once, since more orders are likely due; the node's rate limiter paces the calls.
+// After a shorter one, the next starts PollInterval after this one began polling, or at once if
+// that time has passed: the orders it polled every PollInterval are due again then. After a
+// failed tick, Run backs
+// off: it waits PollInterval doubled for each failed tick in a row, up to MaxBackoff, and at least
+// RateLimitBackoff when the node rate-limited the shop. The first tick that succeeds ends the
+// backoff.
+//
+// Run returns early only with solana.ErrNotDevnet, when the node serves another cluster: the
+// watcher cannot work, so the caller should stop. It returns that error even if ctx ends at the
+// same time.
+func (w *Watcher) Run(ctx context.Context) error {
+	w.rec.Record(ctx, audit.Event{Kind: audit.WatcherStarted, Message: "watcher started", Data: map[string]any{
+		"poll_interval": w.cfg.PollInterval.String(), "batch": w.cfg.Batch, "late_window": w.cfg.LateWindow.String(),
+	}})
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		w.rec.Record(ctx, audit.Event{Kind: audit.WatcherStopped, Message: "watcher stopped"})
+	}()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	failed := 0 // ticks in a row
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
+		n, err := w.RunOnce(ctx)
+		switch {
+		case errors.Is(err, solana.ErrNotDevnet):
+			return err
+		case ctx.Err() != nil:
+			return nil
+		case err != nil:
+			failed++
+			timer.Reset(w.backoff(failed, errors.Is(err, solana.ErrRateLimited)))
+		default:
+			failed = 0
+			wait := w.tickAt.Add(w.cfg.PollInterval).Sub(w.now()) // by the clock nextPoll uses
+			if n == w.cfg.Batch {
+				wait = 0 // more orders are likely due
+			}
+			timer.Reset(max(wait, 0))
+		}
+	}
+}
+
+// backoff returns how long Run waits after failed ticks in a row. See Run.
+func (w *Watcher) backoff(failed int, rateLimited bool) time.Duration {
+	d := min(w.cfg.PollInterval<<min(failed, 6), w.cfg.MaxBackoff)
+	if rateLimited {
+		d = max(d, w.cfg.RateLimitBackoff)
+	}
+	return d
 }
 
 // RunOnce polls the orders that are due, at most cfg.Batch of them and the longest due first, and
@@ -141,6 +211,7 @@ func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 		w.devnet = true
 	}
 	now := w.now()
+	w.tickAt = now
 	lateCutoff := now.Add(-w.cfg.LateWindow)
 	if _, err := w.store.StopPolling(ctx, lateCutoff); err != nil && w.fail(ctx, nil, err) {
 		return 0, err
