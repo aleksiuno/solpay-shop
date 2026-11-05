@@ -75,6 +75,34 @@ func (q *Queries) ExpireOrder(ctx context.Context, arg ExpireOrderParams) (time.
 	return expires_at, err
 }
 
+const fulfilOrder = `-- name: FulfilOrder :execrows
+UPDATE orders
+SET status = $1, fulfilled_at = $2, updated_at = now()
+WHERE id = $3 AND status = $4
+`
+
+type FulfilOrderParams struct {
+	ToStatus    string
+	FulfilledAt *time.Time
+	ID          uuid.UUID
+	FromStatus  string
+}
+
+// Marks the order fulfilled. Like RefundOrder, it changes only an order still in from_status, so
+// of two first downloads at once, only one changes the row.
+func (q *Queries) FulfilOrder(ctx context.Context, arg FulfilOrderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, fulfilOrder,
+		arg.ToStatus,
+		arg.FulfilledAt,
+		arg.ID,
+		arg.FromStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getOrder = `-- name: GetOrder :one
 SELECT o.id, o.product_id, o.quantity, o.amount_lamports, o.reference, o.status, o.received_lamports, o.expires_at, o.next_poll_at, o.paid_at, o.fulfilled_at, o.refunded_at, o.created_at, o.updated_at, p.slug AS product_slug, p.title AS product_title,
        EXISTS (SELECT 1 FROM payments pm WHERE pm.order_id = o.id AND pm.outcome = 'late') AS has_late_payment
