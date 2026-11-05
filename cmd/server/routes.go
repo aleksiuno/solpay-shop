@@ -25,7 +25,7 @@ func routes(cfg config.Config, log *slog.Logger, site web.Deps, api httpapi.Deps
 
 	admin := http.NewServeMux()
 	web.RegisterAdmin(admin, site)
-	httpapi.RegisterAdmin(admin)
+	httpapi.RegisterAdmin(admin, api)
 	guarded := noFrames(httpapi.BasicAuth(cfg.AdminUser, cfg.AdminPass)(admin))
 
 	root := http.NewServeMux()

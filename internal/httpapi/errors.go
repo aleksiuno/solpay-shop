@@ -18,6 +18,7 @@ const (
 	codeNotFound         = "not_found"
 	codeMethodNotAllowed = "method_not_allowed"
 	codeProductInactive  = "product_inactive"
+	codeSlugTaken        = "slug_taken"
 	codeUnauthorized     = "unauthorized"
 	codeForbidden        = "forbidden"
 	codeInternal         = "internal"
@@ -57,9 +58,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // know is a 500 internal envelope, and is logged instead of sent.
 func (a api) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var invalid *order.ValidationError
+	var invalidProduct *product.ValidationError
 	switch {
 	case errors.As(err, &invalid):
 		writeError(w, http.StatusUnprocessableEntity, codeValidationFailed, invalid.Field+" "+invalid.Reason)
+	case errors.As(err, &invalidProduct):
+		writeError(w, http.StatusUnprocessableEntity, codeValidationFailed, invalidProduct.Field+" "+invalidProduct.Reason)
+	case errors.Is(err, product.ErrSlugTaken):
+		writeError(w, http.StatusConflict, codeSlugTaken, "another product has this slug")
 	case errors.Is(err, product.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, "no such product")
 	case errors.Is(err, order.ErrNotFound):

@@ -153,8 +153,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 		ExpiryGrace: watchCfg.ExpiryGrace, ProductAdmin: products, ProductFiles: files, Log: logger,
 	}
 	api := httpapi.Deps{
-		DB: pool, Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress,
-		Now: now, Log: logger,
+		DB: pool, Products: products, Orders: orders, Downloads: downloads, ProductAdmin: products,
+		Merchant: cfg.MerchantAddress, Now: now, Log: logger,
 	}
 	srv := &http.Server{
 		Handler:           routes(cfg, logger, site, api),

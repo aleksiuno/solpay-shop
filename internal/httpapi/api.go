@@ -17,9 +17,11 @@ type Deps struct {
 	Products  Products
 	Orders    Orders
 	Downloads Downloads
-	Merchant  string           // the address that receives payments
-	Now       func() time.Time // the clock that decides whether an order can still be paid
-	Log       *slog.Logger
+	// ProductAdmin serves the admin API's product endpoints.
+	ProductAdmin ProductAdmin
+	Merchant     string           // the address that receives payments
+	Now          func() time.Time // the clock that decides whether an order can still be paid
+	Log          *slog.Logger
 }
 
 // Products lists and finds products. *product.Service is one.
