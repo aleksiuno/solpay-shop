@@ -86,6 +86,8 @@ var adminPaths = []string{
 	"/admin/no-such-page",
 	"/admin/products",
 	"/admin/products/new",
+	"/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
+	"/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/edit",
 	"/api/v1/admin/",
 	"/api/v1/admin/no-such-endpoint",
 }
@@ -128,7 +130,9 @@ func TestAdminPagesAreMounted(t *testing.T) {
 	h := newRouter()
 	tests := []struct{ method, path, allow string }{
 		{http.MethodDelete, "/admin/products", "GET, HEAD, POST"},
-		{http.MethodDelete, "/admin/products/new", "GET, HEAD"},
+		{http.MethodDelete, "/admin/products/new", "GET, HEAD, POST"},
+		{http.MethodGet, "/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "POST"},
+		{http.MethodDelete, "/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/edit", "GET, HEAD"},
 	}
 	for _, tt := range tests {
 		w := request(h, tt.method, tt.path, withAuth(adminUser, adminPass))

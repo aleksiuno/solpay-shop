@@ -17,13 +17,14 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
-// productAdmin holds products. A set err is returned by Create instead of storing, and listErr
-// by List. It notes the products it was asked to store and whether List
+// productAdmin holds products by id. A set err is returned by Create and Update instead of
+// storing, and listErr by List. It notes the products it was asked to store and whether List
 // was asked for active ones only.
 type productAdmin struct {
 	products   []product.Product
 	err        error
 	listErr    error
+	getErr     error
 	saved      []product.Product
 	activeOnly bool
 }
@@ -33,9 +34,32 @@ func (a *productAdmin) List(_ context.Context, activeOnly bool) ([]product.Produ
 	return a.products, a.listErr
 }
 
+func (a *productAdmin) GetByID(_ context.Context, id uuid.UUID) (product.Product, error) {
+	if a.getErr != nil {
+		return product.Product{}, a.getErr
+	}
+	for _, p := range a.products {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return product.Product{}, product.ErrNotFound
+}
+
 func (a *productAdmin) Create(_ context.Context, p product.Product) (product.Product, error) {
 	a.saved = append(a.saved, p)
 	return p, a.err
+}
+
+func (a *productAdmin) Update(ctx context.Context, p product.Product) (product.Product, error) {
+	a.saved = append(a.saved, p)
+	if a.err != nil {
+		return product.Product{}, a.err
+	}
+	if _, err := a.GetByID(ctx, p.ID); err != nil {
+		return product.Product{}, err
+	}
+	return p, nil
 }
 
 // fileList lists the files that products can sell, or fails with err.
@@ -68,7 +92,7 @@ func TestAdminListsEveryProduct(t *testing.T) {
 	assert.False(t, a.activeOnly, "those no longer for sale too")
 	assert.Contains(t, body, `<a class="button" href="/admin/products/new">New product</a>`)
 	assert.Contains(t, body, "<tr><td><code>go-payments-checklist</code></td><td>Go payments checklist</td><td>0.005 SOL</td>"+
-		"<td><code>checklist-v2.md</code></td><td>yes</td></tr>")
+		"<td><code>checklist-v2.md</code></td><td>yes</td><td><a href=\"/admin/products/"+checklist.ID.String()+"/edit\">Edit</a></td></tr>")
 	assert.Contains(t, body, "<td>Old notes</td><td>0.001 SOL</td><td><code>old.md</code></td><td>no</td>")
 }
 
@@ -183,6 +207,65 @@ func TestAdminRefusesAFormItCannotRead(t *testing.T) {
 	form.Set("description", strings.Repeat("x", 70_000))
 	requirePage(t, post(newAdmin(a), "/admin/products", form), http.StatusBadRequest)
 	assert.Empty(t, a.saved)
+}
+
+func TestAdminEditForm(t *testing.T) {
+	body := requirePage(t, get(newAdmin(&productAdmin{products: []product.Product{checklist}}), "/admin/products/"+checklist.ID.String()+"/edit"), http.StatusOK)
+	assert.Contains(t, body, "<h1>Edit product</h1>")
+	assert.Contains(t, body, `action="/admin/products/`+checklist.ID.String()+`"`)
+	assert.Contains(t, body, `name="slug" value="go-payments-checklist"`)
+	assert.Contains(t, body, `name="title" value="Go payments checklist"`)
+	assert.Contains(t, body, `<input type="checkbox" name="active" checked>`)
+	assert.Contains(t, body, ">A checklist for payment code in Go.</textarea>")
+	assert.Contains(t, body, `name="price" value="0.005"`)
+	assert.Contains(t, body, "<option selected>checklist-v2.md</option>")
+}
+
+// A product whose file has gone keeps it in the form, so that saving does not pick another.
+func TestAdminEditFormKeepsAFileThatHasGone(t *testing.T) {
+	p := retired // old.md is not in the files directory
+	body := requirePage(t, get(newAdmin(&productAdmin{products: []product.Product{p}}), "/admin/products/"+p.ID.String()+"/edit"), http.StatusOK)
+	assert.Contains(t, body, "<option selected>old.md</option>\n<option>checklist-v2.md</option>")
+	assert.Contains(t, body, `<input type="checkbox" name="active">`, "not for sale")
+}
+
+func TestAdminEditFormWhenTheStoreFails(t *testing.T) {
+	a := &productAdmin{products: []product.Product{checklist}, getErr: errBoom}
+	requirePage(t, get(newAdmin(a), "/admin/products/"+checklist.ID.String()+"/edit"), http.StatusInternalServerError)
+}
+
+func TestAdminEditFormForAProductThatDoesNotExist(t *testing.T) {
+	mux := newAdmin(&productAdmin{products: []product.Product{checklist}})
+	for _, id := range []string{retired.ID.String(), "not-a-uuid"} {
+		assert.Contains(t, requirePage(t, get(mux, "/admin/products/"+id+"/edit"), http.StatusNotFound), "There is no such product.", id)
+	}
+}
+
+func TestAdminUpdatesAProduct(t *testing.T) {
+	a := &productAdmin{products: []product.Product{checklist}}
+	form := productForm()
+	form.Set("price", "0.007")
+	w := post(newAdmin(a), "/admin/products/"+checklist.ID.String(), form)
+
+	assert.Equal(t, http.StatusSeeOther, w.Code)
+	assert.Equal(t, "/admin/products", w.Header().Get("Location"))
+	require.Len(t, a.saved, 1)
+	assert.Equal(t, checklist.ID, a.saved[0].ID)
+	assert.Equal(t, int64(7_000_000), a.saved[0].PriceLamports)
+}
+
+func TestAdminUpdateShowsTheProblemOnTheEditForm(t *testing.T) {
+	a := &productAdmin{products: []product.Product{checklist}, err: product.ErrSlugTaken}
+	body := requirePage(t, post(newAdmin(a), "/admin/products/"+checklist.ID.String(), productForm()), http.StatusConflict)
+	assert.Contains(t, body, "<h1>Edit product</h1>")
+	assert.Contains(t, body, `action="/admin/products/`+checklist.ID.String()+`"`)
+}
+
+func TestAdminUpdateAProductThatDoesNotExist(t *testing.T) {
+	mux := newAdmin(&productAdmin{products: []product.Product{checklist}})
+	for _, id := range []string{retired.ID.String(), "not-a-uuid"} {
+		requirePage(t, post(mux, "/admin/products/"+id, productForm()), http.StatusNotFound)
+	}
 }
 
 func TestAdminFormWhenTheFilesCannotBeListed(t *testing.T) {
