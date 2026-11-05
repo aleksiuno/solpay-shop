@@ -1,4 +1,5 @@
-// Package download reads the product files that paid orders download.
+// Package download gives paid orders their product files: it makes and checks signed download
+// links, and reads the files from one directory.
 package download
 
 import (
