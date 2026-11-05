@@ -95,6 +95,8 @@ var adminPaths = []string{
 	"/api/v1/admin/no-such-endpoint",
 	"/api/v1/admin/products",
 	"/api/v1/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
+	"/api/v1/admin/orders",
+	"/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
 	"/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund",
 }
 
@@ -145,6 +147,8 @@ func TestAdminRoutesAreMounted(t *testing.T) {
 		{http.MethodDelete, "/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/edit", "GET, HEAD"},
 		{http.MethodDelete, "/api/v1/admin/products", "GET, HEAD, POST"},
 		{http.MethodGet, "/api/v1/admin/products/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "PUT"},
+		{http.MethodPost, "/api/v1/admin/orders", "GET, HEAD"},
+		{http.MethodPost, "/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "GET, HEAD"},
 		{http.MethodGet, "/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund", "POST"},
 	}
 	for _, tt := range tests {
