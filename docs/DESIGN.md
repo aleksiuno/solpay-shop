@@ -215,6 +215,13 @@ signature: 10 orders take about 12.5 s, and 35 about 44 s. Underpaid and expired
 deadline are polled once a minute, so they add little to N; a pending order keeps the poll interval
 until it expires, two minutes or more after its deadline.
 
+The order page shows the request as an "Open in wallet" link, with the address, the amount and the
+reference, and reloads itself every 5 seconds while a payment sent on time is still expected: a
+meta refresh, with no JavaScript, at the cost of clearing a text selection on each reload. A
+Solana Pay URL names no cluster, so a wallet set to mainnet would pay it with real SOL, which the
+shop, watching devnet only, never sees. The page warns about this above the link, and the demo
+prices stay at a few thousandths of a SOL.
+
 Alternative considered: a webhook from an indexing service. It would report a payment within a
 second or two, but it needs an account with the provider, a public URL for the shop, and polling
 anyway to catch up on the calls the shop missed while it was down. Polling needs only the public RPC
