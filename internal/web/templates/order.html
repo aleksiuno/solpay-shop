@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>{{.Heading}}</h1>
+<p class="meta">{{.Order.ProductTitle}}, {{.Order.Quantity}} {{if eq .Order.Quantity 1}}licence{{else}}licences{{end}}, {{sol .Order.AmountLamports}} SOL</p>
+{{range .Notes}}<p>{{.}}</p>
+{{end}}
+{{- with .Pay}}
+<p class="banner" role="note"><strong>Devnet only.</strong> Switch your wallet to Devnet before paying (Phantom: Settings → Developer Settings → Testnet Mode → Solana Devnet). A mainnet wallet would send real SOL, which this shop never detects.</p>
+<p><a class="button" href="{{.URL}}">Open in wallet</a></p>
+<dl class="pay">
+<dt>Amount</dt><dd>{{.Amount}} SOL</dd>
+<dt>Address</dt><dd><code>{{.Recipient}}</code><br><small>A plain Send to this address is not detected: the payment must include the reference account. Use the wallet link or devpay.</small></dd>
+<dt>Reference</dt><dd><code>{{.Reference}}</code></dd>
+<dt>Window closes</dt><dd>{{.Closes}}</dd>
+</dl>
+<p>Or pay with devpay, from a clone of the solpay-shop repository; its README says how to make the payer key:</p>
+<pre><code>{{.Devpay}}</code></pre>
+{{- end}}
+{{with .Download}}
+<p><a class="button" href="{{.}}">Download</a></p>
+{{- end}}
+{{if .Reload}}
+<p><a href="/orders/{{.Order.ID}}">Reload to check again</a></p>
+{{- end}}
+{{end}}

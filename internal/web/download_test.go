@@ -63,6 +63,11 @@ func (d *downloads) Open(_ context.Context, id uuid.UUID, exp, sig string, fulfi
 	return download.File{Name: "go-payments-checklist.md", ModTime: modTime, Content: d.content}, nil
 }
 
+// Link gives every order the link below.
+func (d *downloads) Link(order.Order) (string, bool) {
+	return link, true
+}
+
 const link = "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e?exp=1793534400&sig=c2lnbmF0dXJl"
 
 func TestDownloadSendsTheFileAsAnAttachment(t *testing.T) {

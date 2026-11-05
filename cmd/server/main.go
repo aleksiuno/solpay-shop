@@ -115,8 +115,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	if err != nil {
 		return err
 	}
-	watcher := payment.NewWatcher(chain, db.NewPayments(pool, events), events, cfg.MerchantAddress,
-		payment.DefaultConfig(cfg.PollInterval), now)
+	watchCfg := payment.DefaultConfig(cfg.PollInterval)
+	watcher := payment.NewWatcher(chain, db.NewPayments(pool, events), events, cfg.MerchantAddress, watchCfg, now)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
@@ -148,7 +148,10 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	reqCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelRequests()
 
-	site := web.Deps{Products: products, Downloads: downloads, Log: logger}
+	site := web.Deps{
+		Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress, Now: now,
+		ExpiryGrace: watchCfg.ExpiryGrace, Log: logger,
+	}
 	api := httpapi.Deps{
 		DB: pool, Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress,
 		Now: now, Log: logger,

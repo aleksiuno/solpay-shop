@@ -10,18 +10,26 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"time"
 	"uuid"
 
 	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/money"
+	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
 // Deps holds what the web handlers need.
 type Deps struct {
 	Products  Products
+	Orders    Orders
 	Downloads Downloads
-	Log       *slog.Logger
+	Merchant  string           // the address that receives payments
+	Now       func() time.Time // the clock that decides whether an order can still be paid
+	// ExpiryGrace is how long after its deadline the watcher still polls a pending order before it
+	// expires it, as payment.Config has it. An underpaid order's page reloads itself as long.
+	ExpiryGrace time.Duration
+	Log         *slog.Logger
 }
 
 // Products lists and finds products. *product.Service is one.
@@ -30,8 +38,14 @@ type Products interface {
 	GetBySlug(ctx context.Context, slug string) (product.Product, error)
 }
 
-// Downloads opens the files of paid orders. *download.Service is one.
+// Orders gets orders. *order.Service is one.
+type Orders interface {
+	Get(ctx context.Context, id uuid.UUID) (order.Order, error)
+}
+
+// Downloads makes download links and opens the files of paid orders. *download.Service is one.
 type Downloads interface {
+	Link(o order.Order) (string, bool)
 	Open(ctx context.Context, id uuid.UUID, exp, sig string, fulfil bool) (download.File, error)
 }
 
@@ -55,6 +69,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /static/style.css", styles)
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /p/{slug}", s.product)
+	mux.HandleFunc("GET /orders/{id}", s.order)
 	mux.HandleFunc("GET /d/{id}", s.download)
 }
 
@@ -62,7 +77,7 @@ func Register(mux *http.ServeMux, d Deps) {
 // one that does not parse fails every test.
 func parsePages() map[string]*template.Template {
 	pages := map[string]*template.Template{}
-	for _, name := range []string{"home.html", "product.html", "error.html"} {
+	for _, name := range []string{"home.html", "product.html", "order.html", "error.html"} {
 		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
 	}
 	return pages
@@ -73,10 +88,12 @@ func styles(w http.ResponseWriter, r *http.Request) {
 	http.ServeFileFS(w, r, assets, "static/style.css")
 }
 
-// view is what the base layout shows around a page: its title and the page's own data.
+// view is what the base layout shows around a page: its title, whether it reloads itself every
+// 5 seconds, and the page's own data.
 type view struct {
-	Title string
-	Data  any
+	Title   string
+	Refresh bool
+	Data    any
 }
 
 // render writes page with v and status. It renders into a buffer first, so a template that fails
@@ -108,6 +125,8 @@ func (s site) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, product.ErrNotFound):
 		s.problem(w, r, http.StatusNotFound, "Not found", "There is no such product.")
+	case errors.Is(err, order.ErrNotFound):
+		s.problem(w, r, http.StatusNotFound, "Not found", "There is no such order.")
 	case ctx.Err() != nil:
 		// The client hung up, or the server is stopping; no one reads the answer.
 		s.Log.LogAttrs(ctx, slog.LevelWarn, "request canceled",
