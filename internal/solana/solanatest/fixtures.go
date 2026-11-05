@@ -1,5 +1,6 @@
 // Package solanatest is test support for code that reads Solana: devnet transactions recorded as
-// fixtures, their keys as constants, and deterministic keys for transactions built in tests.
+// fixtures, their keys as constants, deterministic keys for transactions built in tests, and a
+// scripted fake RPC node.
 package solanatest
 
 import (
