@@ -36,6 +36,7 @@ func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	mux.Handle("GET /admin/{$}", http.RedirectHandler("/admin/orders", http.StatusFound))
 	mux.HandleFunc("GET /admin/orders", s.adminOrders)
 	mux.HandleFunc("GET /admin/orders/{id}", s.adminOrderPage)
+	mux.HandleFunc("POST /admin/orders/{id}/refund", s.refundOrder)
 	mux.HandleFunc("GET /admin/products", s.adminProducts)
 	mux.HandleFunc("GET /admin/products/new", s.newProduct)
 	mux.HandleFunc("POST /admin/products", s.createProduct)
