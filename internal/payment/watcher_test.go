@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -41,7 +42,8 @@ type rig struct {
 
 func newRig(t *testing.T, c payment.Config) *rig {
 	r := &rig{t: t, chain: solanatest.NewFake(), store: newMemStore()}
-	r.w = payment.NewWatcher(r.chain, r.store, merchant, c, func() time.Time { return r.now })
+	rec := audit.NewRecorder(r.store, slog.New(slog.DiscardHandler))
+	r.w = payment.NewWatcher(r.chain, r.store, rec, merchant, c, func() time.Time { return r.now })
 	return r
 }
 
@@ -235,29 +237,212 @@ func TestWatcherPollsEveryDueOrderInTurn(t *testing.T) {
 	assert.Equal(t, 20, r.chain.Calls(solanatest.GetSignaturesForAddress))
 }
 
-// A failure ends the tick with its error. The order whose poll failed still gets its next poll
-// time, and the orders after it wait for the next tick.
-func TestWatcherEndsTheTickOnAFailure(t *testing.T) {
-	for _, method := range []string{solanatest.GetSignaturesForAddress, solanatest.GetTransaction} {
-		t.Run(method, func(t *testing.T) {
+// A failed call to the node is recorded and ends the tick with its error. The order whose poll
+// failed still gets its next poll time, and the orders after it wait for the next tick.
+func TestWatcherEndsTheTickOnAFailedCall(t *testing.T) {
+	limited := fmt.Errorf("%w: HTTP 429", solana.ErrRateLimited)
+	tests := []struct {
+		method string
+		err    error
+		sig    string
+		data   map[string]any
+	}{
+		{solanatest.GetSignaturesForAddress, limited, "", map[string]any{
+			"method": "getSignaturesForAddress", "error": "solana: rate limited: HTTP 429", "status": 429,
+		}},
+		{solanatest.GetTransaction, errBoom, "sig-1", map[string]any{"method": "getTransaction", "error": "boom"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
 			r := newRig(t, cfg)
 			first, second := r.order(), r.order()
 			r.store.find(second.ID).next = new(placed.Add(time.Second)) // due after first
 			r.chain.Add(first.Reference, paying(first, "sig-1", 10_000_000, placed))
-			r.chain.FailNext(method, errBoom)
+			r.chain.FailNext(tt.method, tt.err)
 			now := placed.Add(time.Minute)
 			r.now = now
 
 			n, err := r.w.RunOnce(t.Context())
-			require.ErrorIs(t, err, errBoom)
+			require.ErrorIs(t, err, tt.err)
 			assert.Equal(t, 1, n)
 			assert.Empty(t, r.store.ledger)
+			assert.Equal(t, []audit.Event{{
+				OrderID: &first.ID, Kind: audit.RPCError, Message: "RPC call failed", Signature: tt.sig, Data: tt.data,
+			}}, r.store.events)
 			assert.Equal(t, new(now.Add(cfg.PollInterval)), r.store.get(first.ID).next)
 
 			assert.Equal(t, 1, r.tick(now), "only the order that was not polled is due")
 			assert.Equal(t, new(now.Add(cfg.PollInterval)), r.store.get(second.ID).next)
 		})
 	}
+}
+
+// Each call that the node does not answer gives up after RPCTimeout, is recorded, and ends the
+// tick.
+func TestWatcherTimesOutACall(t *testing.T) {
+	c := cfg
+	c.RPCTimeout = 3 * time.Second
+	for _, method := range []string{solanatest.GetGenesisHash, solanatest.GetSignaturesForAddress, solanatest.GetTransaction} {
+		t.Run(method, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := newRig(t, c)
+				o := r.order()
+				r.order()
+				r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, placed))
+				r.chain.BlockUntilDone(method)
+				r.now = placed.Add(time.Minute)
+				want := audit.Event{
+					OrderID: &o.ID, Kind: audit.RPCTimeout, Message: "RPC call timed out",
+					Data: map[string]any{"method": method, "timeout": "3s"},
+				}
+				wantN := 1
+				switch method {
+				case solanatest.GetGenesisHash:
+					want.OrderID, wantN = nil, 0
+				case solanatest.GetTransaction:
+					want.Signature = "sig-1"
+				}
+
+				start := time.Now()
+				n, err := r.w.RunOnce(t.Context())
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.Equal(t, c.RPCTimeout, time.Since(start))
+				assert.Equal(t, wantN, n)
+				assert.Equal(t, []audit.Event{want}, r.store.events)
+			})
+		})
+	}
+}
+
+// When an order's poll and its rescheduling both fail, each failure is recorded as what it is.
+func TestWatcherRecordsBothFailuresOfAnOrder(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	r.chain.FailNext(solanatest.GetSignaturesForAddress, fmt.Errorf("%w: HTTP 429", solana.ErrRateLimited))
+	r.store.fail["MarkPolled"] = fmt.Errorf("mark polled: %w", context.DeadlineExceeded)
+	r.now = placed
+
+	_, err := r.w.RunOnce(t.Context())
+	require.ErrorIs(t, err, solana.ErrRateLimited)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, []audit.Kind{audit.RPCError, audit.WatcherError}, r.store.kinds(o.ID))
+	assert.Equal(t, 429, r.store.events[0].Data["status"])
+}
+
+// A permanent failure to list one order's transactions is recorded, and the tick goes on to the
+// next order.
+func TestWatcherGoesOnAfterAPermanentFailure(t *testing.T) {
+	r := newRig(t, cfg)
+	first, second := r.order(), r.order()
+	r.store.find(second.ID).next = new(placed.Add(time.Second))
+	r.chain.Add(second.Reference, paying(second, "sig-2", 10_000_000, placed))
+	r.chain.FailNext(solanatest.GetSignaturesForAddress, fmt.Errorf("%w: signature entry 0 is null", solana.ErrPermanent))
+
+	assert.Equal(t, 2, r.tick(placed.Add(time.Minute)))
+	assert.Equal(t, []audit.Kind{audit.RPCError}, r.store.kinds(first.ID))
+	assert.Equal(t, order.Paid, r.store.get(second.ID).Status)
+}
+
+// A failure of the shop's own in one order's poll is recorded, and the tick goes on to the next
+// order.
+func TestWatcherGoesOnAfterAStoreFailure(t *testing.T) {
+	tests := []struct {
+		method string
+		status order.Status // the failing order's, after the tick
+	}{
+		{"KnownSignatures", order.Pending},
+		{"Apply", order.Pending},
+		{"MarkPolled", order.Paid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			r := newRig(t, cfg)
+			first, second := r.order(), r.order()
+			r.store.find(second.ID).next = new(placed.Add(time.Second))
+			r.chain.Add(first.Reference, paying(first, "sig-1", 10_000_000, placed))
+			r.chain.Add(second.Reference, paying(second, "sig-2", 10_000_000, placed))
+			r.store.fail[tt.method] = errBoom
+
+			assert.Equal(t, 2, r.tick(placed.Add(time.Minute)))
+			assert.Equal(t, tt.status, r.store.get(first.ID).Status)
+			assert.Equal(t, order.Paid, r.store.get(second.ID).Status)
+			assert.Equal(t, []audit.Event{{
+				OrderID: &first.ID, Kind: audit.WatcherError, Message: "watcher failed",
+				Data: map[string]any{"error": "poll order " + first.ID.String() + ": boom"},
+			}}, r.store.ofKind(audit.WatcherError))
+		})
+	}
+}
+
+func TestWatcherEndsTheTickWhenItCannotFindTheOrders(t *testing.T) {
+	r := newRig(t, cfg)
+	r.order()
+	r.store.fail["WatchSet"] = errBoom
+
+	n, err := r.w.RunOnce(t.Context())
+	require.ErrorIs(t, err, errBoom)
+	assert.Zero(t, n)
+	assert.Equal(t, []audit.Event{{
+		Kind: audit.WatcherError, Message: "watcher failed", Data: map[string]any{"error": "boom"},
+	}}, r.store.events)
+}
+
+// Once ctx has ended, a failure ends the tick, whatever failed, and nothing is recorded.
+func TestWatcherRecordsNothingOnceCanceled(t *testing.T) {
+	for name, fail := range map[string]func(r *rig){
+		"node":  func(r *rig) { r.chain.FailNext(solanatest.GetSignaturesForAddress, errBoom) },
+		"store": func(r *rig) { r.store.fail["Apply"] = errBoom },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, cfg)
+			o := r.order()
+			r.order()
+			r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, placed))
+			fail(r)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			r.now = placed.Add(time.Minute)
+
+			n, err := r.w.RunOnce(ctx)
+			require.ErrorIs(t, err, errBoom)
+			assert.Equal(t, 1, n)
+			assert.Empty(t, r.store.events)
+		})
+	}
+}
+
+// Nothing is polled until the node is found to serve devnet. A failed check is recorded and
+// retried on the next tick; once it passes, it is not made again.
+func TestWatcherChecksTheClusterFirst(t *testing.T) {
+	r := newRig(t, cfg)
+	r.order()
+	r.chain.FailNext(solanatest.GetGenesisHash, errBoom)
+
+	n, err := r.w.RunOnce(t.Context())
+	require.ErrorIs(t, err, errBoom)
+	assert.Zero(t, n)
+	assert.Zero(t, r.chain.Calls(solanatest.GetSignaturesForAddress))
+	assert.Equal(t, []audit.Event{{
+		Kind: audit.RPCError, Message: "RPC call failed", Data: map[string]any{"method": "getGenesisHash", "error": "boom"},
+	}}, r.store.events)
+
+	assert.Equal(t, 1, r.tick(placed.Add(time.Minute)))
+	assert.Equal(t, 1, r.tick(placed.Add(2*time.Minute)))
+	assert.Equal(t, 2, r.chain.Calls(solanatest.GetGenesisHash))
+}
+
+// A node that serves another cluster stops the tick before any poll. The error is for the caller
+// to act on, so nothing is recorded.
+func TestWatcherPollsNothingOnAnotherCluster(t *testing.T) {
+	r := newRig(t, cfg)
+	r.order()
+	r.chain.FailNext(solanatest.GetGenesisHash, fmt.Errorf("%w: genesis hash x", solana.ErrNotDevnet))
+
+	n, err := r.w.RunOnce(t.Context())
+	require.ErrorIs(t, err, solana.ErrNotDevnet)
+	assert.Zero(t, n)
+	assert.Zero(t, r.chain.Calls(solanatest.GetSignaturesForAddress))
+	assert.Empty(t, r.store.events)
 }
 
 func TestWatcherRejectsAFailedTransactionWithoutFetchingIt(t *testing.T) {
@@ -304,23 +489,9 @@ func TestWatcherWaitsForAListedTransaction(t *testing.T) {
 	r.tick(now)
 	assert.Equal(t, order.Underpaid, r.store.get(o.ID).Status)
 	assert.NotContains(t, r.store.ledger, "sig-1")
+	assert.Empty(t, r.store.ofKind(audit.RPCError))
 
 	r.tick(now.Add(cfg.PollInterval))
 	assert.Equal(t, order.Paid, r.store.get(o.ID).Status)
 	assert.Equal(t, 3, r.chain.Calls(solanatest.GetTransaction))
-}
-
-// A call that the node does not answer gives up after RPCTimeout and ends the tick.
-func TestWatcherTimesOutACall(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		r := newRig(t, cfg)
-		r.order()
-		r.chain.BlockUntilDone(solanatest.GetSignaturesForAddress)
-		r.now = placed.Add(time.Minute)
-
-		start := time.Now()
-		_, err := r.w.RunOnce(t.Context())
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		assert.Equal(t, cfg.RPCTimeout, time.Since(start))
-	})
 }
