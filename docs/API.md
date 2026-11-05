@@ -32,7 +32,7 @@ change.
 
 | Code | Status | When |
 |---|---|---|
-| `invalid_request` | 400 | the body is empty, larger than 64 KiB or not one JSON object, or has an unknown field or a value of the wrong type (such as a quantity that is not a whole number) |
+| `invalid_request` | 400 | the body is empty, larger than 64 KiB or not one JSON object, or has an unknown field or a value of the wrong type (such as a quantity that is not a whole number), or a query parameter has a value the endpoint does not take |
 | `validation_failed` | 422 | a value is out of range, such as a quantity outside 1 to 10, or a required field is missing |
 | `not_found` | 404 | no product has the slug or id, no order has the id (or the id is not a UUID), or no endpoint has the path |
 | `method_not_allowed` | 405 | the path exists, but not with this method; the `Allow` header lists the methods it has |
@@ -220,6 +220,68 @@ order above; `409 slug_taken`.
 
 Replaces every field of the product with the id, with a body as for `POST`, and answers `200` with
 the product. Errors: as for `POST`, and `404 not_found` for an unknown id or one that is not a UUID.
+
+### `GET /api/v1/admin/orders`
+
+Lists the newest orders, at most 100, newest first. `?status=` keeps only the orders in that
+status; any other value is `400 invalid_request`.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" 'localhost:8080/api/v1/admin/orders?status=paid'
+```
+
+```json
+{
+  "orders": [
+    {
+      "id": "<ORDER_ID>",
+      "status": "paid",
+      "product": {"slug": "go-payments-checklist", "title": "Go payments checklist"},
+      "quantity": 2,
+      "amount_lamports": 10000000,
+      "received_lamports": 10000000,
+      "reference": "<REF>",
+      "has_late_payment": false,
+      "expires_at": "2026-11-03T12:15:00Z",
+      "created_at": "2026-11-03T12:00:00Z",
+      "paid_at": "2026-11-03T12:01:20Z",
+      "fulfilled_at": null,
+      "refunded_at": null
+    }
+  ]
+}
+```
+
+An admin order is what the shop holds, without the payment request and the download link that
+`GET /api/v1/orders/{id}` adds. `has_late_payment` is `true` once a payment reached the order
+after its deadline; such a payment is never credited.
+
+### `GET /api/v1/admin/orders/{id}`
+
+Gets one order, as in the list, with two more keys: `payments`, what each transaction that
+names the order's reference did for it, by slot, and `events`, what happened to the order, the
+newest first and at most 100.
+
+```json
+{
+  "id": "<ORDER_ID>",
+  "status": "paid",
+  "payments": [
+    {"signature": "<SIG>", "outcome": "credited", "lamports": 10000000, "slot": 4242,
+     "block_time": "2026-11-03T12:01:20Z"}
+  ],
+  "events": [
+    {"id": 7, "order_id": "<ORDER_ID>", "level": "info", "kind": "payment.verified",
+     "message": "order paid", "signature": "<SIG>", "data": {"lamports": 10000000},
+     "created_at": "2026-11-03T12:01:30Z"}
+  ]
+}
+```
+
+A payment's `outcome` is `credited`, `late` (valid, but after the deadline or to an order that
+takes no more) or `rejected`, with a `reason`: `tx_failed`, `no_matching_transfer`,
+`balance_mismatch` or `unfetchable`. `block_time` is `null` when the node gave none. Errors:
+`404 not_found` for an unknown id or one that is not a UUID.
 
 ### `POST /api/v1/admin/orders/{id}/refund`
 
