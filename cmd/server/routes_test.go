@@ -84,6 +84,8 @@ func errorCode(t *testing.T, w *httptest.ResponseRecorder) string {
 var adminPaths = []string{
 	"/admin/",
 	"/admin/no-such-page",
+	"/admin/products",
+	"/admin/products/new",
 	"/api/v1/admin/",
 	"/api/v1/admin/no-such-endpoint",
 }
@@ -106,6 +108,33 @@ func TestAdminRoutesNeedCredentials(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// The admin routes' answers, with or without credentials, forbid framing by another site.
+func TestAdminRoutesForbidFraming(t *testing.T) {
+	h := newRouter()
+	for _, prepare := range [][]func(*http.Request){nil, {withAuth(adminUser, adminPass)}} {
+		for _, path := range []string{"/admin/no-such-page", "/api/v1/admin/no-such-endpoint"} {
+			w := request(h, http.MethodGet, path, prepare...)
+			assert.Equal(t, "DENY", w.Result().Header.Get("X-Frame-Options"), path)
+		}
+	}
+}
+
+// Each admin page is mounted behind the credentials: a wrong method on its path gets the 405 that
+// names the methods it serves, which only a registered pattern gives.
+func TestAdminPagesAreMounted(t *testing.T) {
+	h := newRouter()
+	tests := []struct{ method, path, allow string }{
+		{http.MethodDelete, "/admin/products", "GET, HEAD, POST"},
+		{http.MethodDelete, "/admin/products/new", "GET, HEAD"},
+	}
+	for _, tt := range tests {
+		w := request(h, tt.method, tt.path, withAuth(adminUser, adminPass))
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, tt.path)
+		assert.Equal(t, tt.allow, w.Header().Get("Allow"), tt.path)
+		assert.Equal(t, "DENY", w.Result().Header.Get("X-Frame-Options"), tt.path)
 	}
 }
 

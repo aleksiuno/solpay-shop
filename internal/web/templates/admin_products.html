@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>Products</h1>
+<p><a class="button" href="/admin/products/new">New product</a></p>
+<table class="list">
+<thead><tr><th>Slug</th><th>Title</th><th>Price</th><th>File</th><th>For sale</th></tr></thead>
+<tbody>
+{{- range .}}
+<tr><td><code>{{.Slug}}</code></td><td>{{.Title}}</td><td>{{sol .PriceLamports}} SOL</td><td><code>{{.FileName}}</code></td><td>{{if .Active}}yes{{else}}no{{end}}</td></tr>
+{{- else}}
+<tr><td colspan="5">No products yet.</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{end}}

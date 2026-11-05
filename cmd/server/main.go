@@ -150,7 +150,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 
 	site := web.Deps{
 		Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress, Now: now,
-		ExpiryGrace: watchCfg.ExpiryGrace, Log: logger,
+		ExpiryGrace: watchCfg.ExpiryGrace, ProductAdmin: products, ProductFiles: files, Log: logger,
 	}
 	api := httpapi.Deps{
 		DB: pool, Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress,

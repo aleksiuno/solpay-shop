@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>{{.Heading}}</h1>
+{{with .Problem}}<p class="problem" role="alert">{{.}}</p>{{end}}
+<form class="product-form" method="post" action="{{.Action}}">
+<label for="slug">Slug</label>
+<input id="slug" name="slug" value="{{.Slug}}" required maxlength="64">
+<label for="title">Title</label>
+<input id="title" name="title" value="{{.Title}}" required maxlength="120">
+<label for="description">Description</label>
+<textarea id="description" name="description" rows="4" maxlength="2000">{{.Description}}</textarea>
+<label for="price">Price per licence, in SOL</label>
+<input id="price" name="price" value="{{.Price}}" required placeholder="0.005">
+<label for="file_name">File</label>
+<select id="file_name" name="file_name" required>
+<option value="">Choose a file</option>
+{{- range .Files}}
+<option{{if eq . $.FileName}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select>
+<label class="check"><input type="checkbox" name="active"{{if .Active}} checked{{end}}> For sale</label>
+<button type="submit">Save</button>
+</form>
+<p><a href="/admin/products">All products</a></p>
+{{end}}
