@@ -125,6 +125,7 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
   },
   "expires_at": "2026-11-03T12:15:00Z",
   "paid_at": null,
+  "download_url": null,
   "created_at": "2026-11-03T12:00:00Z"
 }
 ```
@@ -141,13 +142,16 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
   longer be paid: in any status other than `pending` and `underpaid`, and after `expires_at`, even
   while the status is still `pending`.
 - Times are in UTC. `paid_at` is `null` until the order is paid.
+- `download_url` is a link to the order's file while the order is `paid` or `fulfilled`, and
+  `null` otherwise. It is a path on this server, as in `GET /d/{id}` below. Each read gives a new
+  link, which works for 15 minutes.
 
 Errors: `404 not_found` for an unknown id or one that is not a UUID.
 
 ### `GET /d/{id}`
 
-Downloads the file of a paid order, by a link that the shop signed. This is not part of the JSON
-API: every answer is plain text or the file.
+Downloads the file of a paid order, by its `download_url`. This is not part of the JSON API: every
+answer is plain text or the file.
 
 ```sh
 curl -fOJ 'localhost:8080/d/<ORDER_ID>?exp=<EXP>&sig=<SIG>'
@@ -170,7 +174,7 @@ download can resume while its link does. The first `GET` of a paid order moves i
 | Status | When |
 |---|---|
 | `403` | the shop did not make the link, or its order or expiry was changed; or the order is not paid, or was refunded |
-| `410` | the link has expired |
+| `410` | the link has expired; read the order again for a new one |
 | `404` | the order or its file is not there; the order stays as it was |
 
 ## Walkthrough
@@ -183,4 +187,9 @@ curl localhost:8080/api/v1/products
 curl -i localhost:8080/api/v1/orders -d '{"product_slug": "solana-pay-field-notes", "quantity": 1}'
 curl localhost:8080/api/v1/orders/<ORDER_ID>
 go run ./cmd/devpay -keypair data/payer.json '<payment.url from the order>'
+curl localhost:8080/api/v1/orders/<ORDER_ID>
+curl -fOJ 'localhost:8080<download_url from the order>'
 ```
+
+The order shows `paid` and a `download_url` a few seconds after devpay reports the payment
+confirmed.

@@ -224,9 +224,17 @@ endpoint, which lists the transactions that mention any account, a reference inc
 
 A paid order downloads its file by a signed link, `/d/{order_id}?exp=…&sig=…`. `exp` is the time the
 link stops working, 15 minutes after it was made, and `sig` is an HMAC-SHA256 of the order id and
-`exp` under `DOWNLOAD_SECRET`. A link that the shop did not make, or whose order or expiry was
-changed, is refused before the database is read, whatever its expiry, so guessing at the route costs
-a hash and nothing more.
+`exp` under `DOWNLOAD_SECRET`. Each read of a paid or fulfilled order through the API signs a new
+link. A link that the shop did not make, or whose order or expiry was changed, is refused before the
+database is read, whatever its expiry, so guessing at the route costs a hash and nothing more.
+
+The signature is not a second secret. The order id is the customer's key to the order, and the
+link names the order, so whoever holds a link can read the order and get a new link from it: a
+leaked link is as good as a leaked order id. What the expiry limits is the URL itself: a copy of it,
+in a bookmark or a forwarded mail, stops downloading after 15 minutes. Alternative considered: a
+separate random download key per order, so that a link does not reveal the order. A leaked link
+would then be worth 15 minutes at most. It costs a column and a lookup by key, and was left out
+because the order id has to stay private anyway, since it alone reads the order.
 
 A link downloads only while the order is paid or fulfilled, so a refund stops it. The first GET
 marks a paid order fulfilled and stores `download.issued`, in one transaction, with an
