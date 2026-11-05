@@ -111,7 +111,6 @@ func TestUnknownAPIPaths(t *testing.T) {
 func TestAdminAPIAnswersAWrongMethodWithMethodNotAllowed(t *testing.T) {
 	mux := http.NewServeMux()
 	httpapi.RegisterAdmin(mux, httpapi.Deps{})
-	mux.HandleFunc("POST /api/v1/admin/orders/{id}/refund", func(http.ResponseWriter, *http.Request) {})
 	w := serve(mux, httptest.NewRequest(http.MethodGet, "/api/v1/admin/orders/1/refund", nil))
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
