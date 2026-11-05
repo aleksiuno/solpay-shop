@@ -54,6 +54,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	s := site{Deps: d, pages: parsePages()}
 	mux.HandleFunc("GET /static/style.css", styles)
 	mux.HandleFunc("GET /{$}", s.home)
+	mux.HandleFunc("GET /p/{slug}", s.product)
 	mux.HandleFunc("GET /d/{id}", s.download)
 }
 
@@ -61,7 +62,7 @@ func Register(mux *http.ServeMux, d Deps) {
 // one that does not parse fails every test.
 func parsePages() map[string]*template.Template {
 	pages := map[string]*template.Template{}
-	for _, name := range []string{"home.html", "error.html"} {
+	for _, name := range []string{"home.html", "product.html", "error.html"} {
 		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
 	}
 	return pages

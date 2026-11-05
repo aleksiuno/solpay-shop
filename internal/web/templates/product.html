@@ -1,0 +1,9 @@
+{{define "content"}}
+<h1>{{.Product.Title}}</h1>
+<p>{{.Product.Description}}</p>
+<p class="price">{{sol .Product.PriceLamports}} SOL per licence</p>
+{{if not .Product.Active}}
+<p class="notice">This product is no longer for sale.</p>
+{{end}}
+<p><a href="/">All products</a></p>
+{{end}}
