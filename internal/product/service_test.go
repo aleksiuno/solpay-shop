@@ -185,6 +185,38 @@ func TestUpdate(t *testing.T) {
 	require.ErrorIs(t, err, product.ErrNotFound)
 }
 
+// A product off sale may keep its file after the file has gone, so that it can be taken off sale.
+// It may not stay for sale with it, nor take another file that is not there.
+func TestUpdateTakesAProductWhoseFileHasGoneOffSale(t *testing.T) {
+	s, r, f := newService()
+	p := valid()
+	p.Active = true
+	created, err := s.Create(t.Context(), p)
+	require.NoError(t, err)
+	f.names[created.FileName] = false // the file goes
+
+	_, err = s.Update(t.Context(), created)
+	var ve *product.ValidationError
+	require.ErrorAs(t, err, &ve, "for sale")
+	assert.Equal(t, "is not in the files directory", ve.Reason)
+
+	p = created
+	p.Active = false
+	got, err := s.Update(t.Context(), p)
+	require.NoError(t, err)
+	assert.False(t, got.Active)
+	assert.Equal(t, got, r.products[created.ID])
+
+	p.FileName = "missing.md"
+	_, err = s.Update(t.Context(), p)
+	require.ErrorAs(t, err, &ve, "another file that is not there")
+	assert.Equal(t, created.FileName, r.products[created.ID].FileName)
+
+	p.ID = uuid.NewV4()
+	_, err = s.Update(t.Context(), p)
+	require.ErrorIs(t, err, product.ErrNotFound)
+}
+
 func TestListAndGet(t *testing.T) {
 	active, hidden := valid(), valid()
 	active.ID, active.Active = uuid.NewV4(), true
