@@ -4,7 +4,7 @@ The shop's JSON API lives under `/api/v1`. On a local run the base URL is `http:
 
 ## Conventions
 
-- Responses are JSON (`Content-Type: application/json`), except `/healthz`, which is plain text.
+- Responses are JSON (`Content-Type: application/json`), except `/healthz` and downloads.
 - A request body is one JSON object of at most 64 KiB. A field the endpoint does not know is
   refused.
 - Amounts are integers in lamports: 1 SOL is 1,000,000,000 lamports. The API never uses
@@ -143,6 +143,35 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
 - Times are in UTC. `paid_at` is `null` until the order is paid.
 
 Errors: `404 not_found` for an unknown id or one that is not a UUID.
+
+### `GET /d/{id}`
+
+Downloads the file of a paid order, by a link that the shop signed. This is not part of the JSON
+API: every answer is plain text or the file.
+
+```sh
+curl -fOJ 'localhost:8080/d/<ORDER_ID>?exp=<EXP>&sig=<SIG>'
+```
+
+With `-f`, curl reports a refusal instead of saving it as a file; `-J` does not overwrite a file
+that is already there.
+
+The link is `/d/{order_id}?exp={expiry}&sig={signature}`. The expiry is a Unix time in seconds,
+and the signature is the HMAC-SHA256 of `{order_id}|{expiry}` under `DOWNLOAD_SECRET`, in unpadded
+base64url (43 characters). Only the shop can make one. Once the URL is decoded, the id and the
+expiry must be written as the shop writes them: an id in upper case, or an expiry with a leading
+zero, is refused too.
+
+The file comes as an attachment named after the product's slug, such as
+`go-payments-checklist.md`, with `Cache-Control: private, no-store`. `Range` requests work, so a
+download can resume while its link does. The first `GET` of a paid order moves it to `fulfilled`;
+`HEAD` checks the link and the file without that.
+
+| Status | When |
+|---|---|
+| `403` | the shop did not make the link, or its order or expiry was changed; or the order is not paid, or was refunded |
+| `410` | the link has expired |
+| `404` | the order or its file is not there; the order stays as it was |
 
 ## Walkthrough
 

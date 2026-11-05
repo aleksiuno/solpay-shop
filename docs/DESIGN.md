@@ -220,6 +220,24 @@ second or two, but it needs an account with the provider, a public URL for the s
 anyway to catch up on the calls the shop missed while it was down. Polling needs only the public RPC
 endpoint, which lists the transactions that mention any account, a reference included.
 
+## Downloads
+
+A paid order downloads its file by a signed link, `/d/{order_id}?exp=…&sig=…`. `exp` is the time the
+link stops working, 15 minutes after it was made, and `sig` is an HMAC-SHA256 of the order id and
+`exp` under `DOWNLOAD_SECRET`. A link that the shop did not make, or whose order or expiry was
+changed, is refused before the database is read, whatever its expiry, so guessing at the route costs
+a hash and nothing more.
+
+A link downloads only while the order is paid or fulfilled, so a refund stops it. The first GET
+marks a paid order fulfilled and stores `download.issued`, in one transaction, with an
+`UPDATE … WHERE status = 'paid'`, so two first downloads at once store one event. It does so only
+once the file has opened, so a missing file leaves the order paid for a later try, and a HEAD
+request, such as a link checker's, never fulfils. Fulfilled means that the link was used, not that
+the whole file arrived. Files are read through an `os.Root` over the files directory, so no name
+leads outside it, and the download is named after the product's slug, never the name the file is
+stored under. These rules live in `download`; the handler, which leaves Range and conditional
+requests to `http.ServeContent`, lives in `web`.
+
 ## Data model
 
 Four tables. `products` holds the catalogue. `orders` holds each order's state: the amount is a
