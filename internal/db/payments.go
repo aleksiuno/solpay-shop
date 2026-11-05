@@ -210,6 +210,31 @@ func (s *Payments) Expire(ctx context.Context, orderID uuid.UUID, cutoff time.Ti
 	return len(evs) > 0, nil
 }
 
+// Ledger returns the ledger rows of the order with orderID, in the order of their slots. An
+// unknown order has none.
+func (s *Payments) Ledger(ctx context.Context, orderID uuid.UUID) ([]payment.Payment, error) {
+	rows, err := s.q.ListPaymentsByOrder(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("list payments: %w", err)
+	}
+	out := make([]payment.Payment, 0, len(rows))
+	for _, r := range rows {
+		p := payment.Payment{
+			Signature: r.Signature,
+			OrderID:   r.OrderID,
+			Outcome:   payment.Outcome(r.Outcome),
+			Lamports:  r.Lamports,
+			Slot:      r.Slot,
+			BlockTime: r.BlockTime,
+		}
+		if r.Reason != nil {
+			p.Reason = payment.RejectReason(*r.Reason)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 func insertPaymentParams(p payment.Payment) sqlcdb.InsertPaymentParams {
 	var reason *string
 	if p.Reason != "" {
