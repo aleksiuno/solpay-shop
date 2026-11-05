@@ -33,6 +33,7 @@ type orderJSON struct {
 	Payment           *paymentJSON `json:"payment"` // null unless the order can be paid now
 	ExpiresAt         time.Time    `json:"expires_at"`
 	PaidAt            *time.Time   `json:"paid_at"`
+	DownloadURL       *string      `json:"download_url"` // null unless the order can be downloaded
 	CreatedAt         time.Time    `json:"created_at"`
 }
 
@@ -67,6 +68,10 @@ func (a api) newOrderJSON(o order.Order) orderJSON {
 			Reference: o.Reference,
 			URL:       payment.Request(o, a.Merchant).URL(),
 		}
+	}
+	// A paid order gets a new link on every read, since each one works for a short time only.
+	if link, ok := a.Downloads.Link(o); ok {
+		j.DownloadURL = &link
 	}
 	return j
 }

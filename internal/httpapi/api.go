@@ -13,12 +13,13 @@ import (
 
 // Deps holds what the API's handlers need.
 type Deps struct {
-	DB       Pinger // checked by /healthz
-	Products Products
-	Orders   Orders
-	Merchant string           // the address that receives payments
-	Now      func() time.Time // the clock that decides whether an order can still be paid
-	Log      *slog.Logger
+	DB        Pinger // checked by /healthz
+	Products  Products
+	Orders    Orders
+	Downloads Downloads
+	Merchant  string           // the address that receives payments
+	Now       func() time.Time // the clock that decides whether an order can still be paid
+	Log       *slog.Logger
 }
 
 // Products lists and finds products. *product.Service is one.
@@ -31,6 +32,11 @@ type Products interface {
 type Orders interface {
 	Create(ctx context.Context, slug string, qty int) (order.Order, error)
 	Get(ctx context.Context, id uuid.UUID) (order.Order, error)
+}
+
+// Downloads makes download links for paid orders. *download.Service is one.
+type Downloads interface {
+	Link(o order.Order) (string, bool)
 }
 
 // api serves the JSON API with its Deps.

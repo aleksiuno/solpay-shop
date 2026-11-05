@@ -150,7 +150,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 
 	site := web.Deps{Downloads: downloads, Log: logger}
 	api := httpapi.Deps{
-		DB: pool, Products: products, Orders: orders, Merchant: cfg.MerchantAddress, Now: now, Log: logger,
+		DB: pool, Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress,
+		Now: now, Log: logger,
 	}
 	srv := &http.Server{
 		Handler:           routes(cfg, logger, site, api),
