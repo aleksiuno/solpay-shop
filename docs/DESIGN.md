@@ -161,8 +161,9 @@ top-up pays it or an admin refunds it. A pending order expires late on purpose. 
 it no sooner than two minutes after the deadline, and only right after a poll of its reference that
 succeeded. A transaction that the RPC node lists for the reference but cannot return yet also holds
 the expiry back, for up to an hour after the deadline; after that the order expires, and its event
-names the transactions that never resolved. An RPC outage or a slow index therefore delays the
-expiry, instead of expiring an order that was paid on time.
+names the transactions that never resolved. The one exception to a successful poll is a reference
+that the node can never list: after the same hour, its order expires too. An RPC outage or a slow
+index therefore delays the expiry, instead of expiring an order that was paid on time.
 
 Every other move is refused, a move to the same status included: for example expired → paid (a late
 payment never pays an order), pending → refunded (nothing was received) or any move out of

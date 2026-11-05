@@ -84,7 +84,8 @@ func paying(o order.Order, sig string, lamports int64, at time.Time) solana.Tx {
 
 func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, payment.Config{
-		PollInterval: 7 * time.Second, Batch: 8, SignatureLimit: 100, LateWindow: time.Hour, RPCTimeout: 10 * time.Second,
+		PollInterval: 7 * time.Second, Batch: 8, SignatureLimit: 100, LateWindow: time.Hour,
+		ExpiryGrace: 2 * time.Minute, LateCadence: time.Minute, RPCTimeout: 10 * time.Second,
 	}, payment.DefaultConfig(7*time.Second))
 }
 
@@ -389,23 +390,32 @@ func TestWatcherEndsTheTickWhenItCannotFindTheOrders(t *testing.T) {
 
 // Once ctx has ended, a failure ends the tick, whatever failed, and nothing is recorded.
 func TestWatcherRecordsNothingOnceCanceled(t *testing.T) {
-	for name, fail := range map[string]func(r *rig){
-		"node":  func(r *rig) { r.chain.FailNext(solanatest.GetSignaturesForAddress, errBoom) },
-		"store": func(r *rig) { r.store.fail["Apply"] = errBoom },
-	} {
-		t.Run(name, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		fail   func(r *rig, o order.Order)
+		polled int
+	}{
+		{"node", func(r *rig, _ order.Order) { r.chain.FailNext(solanatest.GetSignaturesForAddress, errBoom) }, 1},
+		{"store", func(r *rig, o order.Order) {
+			r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, placed))
+			r.store.fail["Apply"] = errBoom
+		}, 1},
+		{"stopping", func(r *rig, _ order.Order) { r.store.fail["StopPolling"] = errBoom }, 0},
+		{"expiring", func(r *rig, _ order.Order) { r.store.fail["Expire"] = errBoom }, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			r := newRig(t, cfg)
 			o := r.order()
 			r.order()
-			r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, placed))
-			fail(r)
+			tt.fail(r, o)
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			r.now = placed.Add(time.Minute)
+			r.now = due.Add(cfg.ExpiryGrace + time.Second) // past the grace, so that a poll may expire
 
 			n, err := r.w.RunOnce(ctx)
 			require.ErrorIs(t, err, errBoom)
-			assert.Equal(t, 1, n)
+			assert.Equal(t, tt.polled, n)
 			assert.Empty(t, r.store.events)
 		})
 	}
@@ -494,4 +504,215 @@ func TestWatcherWaitsForAListedTransaction(t *testing.T) {
 	r.tick(now.Add(cfg.PollInterval))
 	assert.Equal(t, order.Paid, r.store.get(o.ID).Status)
 	assert.Equal(t, 3, r.chain.Calls(solanatest.GetTransaction))
+}
+
+// A pending order is polled through its grace, and the first poll after it expires the order.
+func TestWatcherExpiresAnUnpaidOrder(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	graceEnd := due.Add(cfg.ExpiryGrace)
+
+	r.tick(graceEnd)
+	require.Equal(t, order.Pending, r.store.get(o.ID).Status, "the grace's last instant")
+	assert.Zero(t, r.store.calls["Expire"], "the store is not asked in the grace")
+	now := graceEnd.Add(cfg.PollInterval)
+	r.tick(now)
+	got := r.store.get(o.ID)
+	assert.Equal(t, order.Expired, got.Status)
+	assert.Equal(t, new(now.Add(cfg.LateCadence)), got.next)
+	assert.Equal(t, []audit.Event{{
+		OrderID: &o.ID, Kind: audit.OrderExpired, Message: "order expired",
+		Data: map[string]any{"expires_at": "2026-11-05T09:15:00Z"},
+	}}, r.store.events)
+}
+
+// An expired order is still polled in its late window, and a payment found then is recorded as
+// late; the order stays expired.
+func TestWatcherRecordsAPaymentAfterExpiry(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	now := due.Add(cfg.ExpiryGrace + time.Second)
+	r.tick(now)
+	require.Equal(t, order.Expired, r.store.get(o.ID).Status)
+
+	r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, now))
+	assert.Equal(t, 1, r.tick(now.Add(cfg.LateCadence)))
+	assert.Equal(t, order.Expired, r.store.get(o.ID).Status)
+	assert.Equal(t, payment.Late, r.store.ledger["sig-1"].Outcome)
+	assert.Equal(t, []audit.Kind{audit.OrderExpired, audit.PaymentSeen, audit.PaymentLate}, r.store.kinds(o.ID))
+	assert.Equal(t, 1, r.store.calls["Expire"], "the store is not asked to expire it again")
+}
+
+// Only a transaction that the node lists but cannot return yet holds the expiry back. A rejected
+// one does not, such as one that failed on chain.
+func TestWatcherExpiresAnOrderWithOnlyRejectedTransactions(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	tx := paying(o, "sig-1", 10_000_000, due.Add(-time.Second))
+	tx.Failed = true
+	r.chain.Add(o.Reference, tx)
+
+	r.tick(due.Add(cfg.ExpiryGrace + time.Second))
+	assert.Equal(t, order.Expired, r.store.get(o.ID).Status)
+	assert.Equal(t, []audit.Kind{audit.PaymentSeen, audit.PaymentInvalidTx, audit.OrderExpired}, r.store.kinds(o.ID))
+	assert.NotContains(t, r.store.ofKind(audit.OrderExpired)[0].Data, "unresolved_signatures")
+}
+
+// An order polled while it is pending, or at or before its deadline, is next due PollInterval
+// later; otherwise LateCadence later, as long as that is in its late window.
+func TestWatcherSchedulesTheNextPoll(t *testing.T) {
+	end := due.Add(cfg.LateWindow)
+	tests := []struct {
+		name   string
+		status order.Status
+		at     time.Time
+		want   *time.Time
+	}{
+		{"pending after its deadline", order.Pending, due.Add(time.Minute), new(due.Add(time.Minute + cfg.PollInterval))},
+		{"underpaid at its deadline", order.Underpaid, due, new(due.Add(cfg.PollInterval))},
+		{"underpaid after its deadline", order.Underpaid, due.Add(time.Microsecond), new(due.Add(time.Microsecond + cfg.LateCadence))},
+		{"expired", order.Expired, due.Add(time.Minute), new(due.Add(time.Minute + cfg.LateCadence))},
+		{"one poll left", order.Underpaid, end.Add(-cfg.LateCadence - time.Microsecond), new(end.Add(-time.Microsecond))},
+		{"no poll left", order.Underpaid, end.Add(-cfg.LateCadence), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(t, cfg)
+			o := r.order()
+			r.store.find(o.ID).Status = tt.status
+
+			assert.Equal(t, 1, r.tick(tt.at))
+			assert.Equal(t, tt.want, r.store.get(o.ID).next)
+		})
+	}
+}
+
+// A transaction that the node lists but cannot return yet may pay the order on time, so it holds
+// back the expiry of an order past its grace.
+func TestWatcherWaitsForAListedTransactionBeforeExpiring(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, due.Add(-time.Second)))
+	r.chain.NotFound("sig-1", 1)
+
+	now := due.Add(cfg.ExpiryGrace + time.Second)
+	r.tick(now)
+	assert.Equal(t, order.Pending, r.store.get(o.ID).Status)
+	assert.Empty(t, r.store.events)
+	r.tick(now.Add(cfg.PollInterval))
+	assert.Equal(t, order.Paid, r.store.get(o.ID).Status)
+}
+
+// Transactions that the node lists but keeps reporting as not found hold back expiry only until
+// the late window ends. The event names them, oldest first.
+func TestWatcherExpiresAnOrderWithUnresolvedTransactions(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, due.Add(-3*time.Second)))
+	failed := paying(o, "sig-2", 10_000_000, due.Add(-2*time.Second))
+	failed.Failed = true
+	r.chain.Add(o.Reference, failed)
+	r.chain.Add(o.Reference, paying(o, "sig-3", 10_000_000, due.Add(-time.Second)))
+	r.chain.NotFound("sig-1", -1)
+	r.chain.NotFound("sig-3", -1)
+	end := due.Add(cfg.LateWindow)
+
+	r.tick(end.Add(-cfg.PollInterval))
+	require.Equal(t, order.Pending, r.store.get(o.ID).Status)
+	r.tick(end)
+	got := r.store.get(o.ID)
+	assert.Equal(t, order.Expired, got.Status)
+	assert.Nil(t, got.next, "the window is over")
+	assert.Equal(t, []audit.Event{{
+		OrderID: &o.ID, Kind: audit.OrderExpired, Message: "order expired",
+		Data: map[string]any{"expires_at": "2026-11-05T09:15:00Z", "unresolved_signatures": []string{"sig-1", "sig-3"}},
+	}}, r.store.ofKind(audit.OrderExpired))
+}
+
+// A listing of the order's reference that fails for good holds back expiry only until the late
+// window ends.
+func TestWatcherExpiresAnOrderItCannotList(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	unlisted := fmt.Errorf("%w: signature entry 0 is null", solana.ErrPermanent)
+	end := due.Add(cfg.LateWindow)
+
+	r.chain.FailNext(solanatest.GetSignaturesForAddress, unlisted)
+	r.tick(end.Add(-cfg.PollInterval))
+	require.Equal(t, order.Pending, r.store.get(o.ID).Status)
+	r.chain.FailNext(solanatest.GetSignaturesForAddress, unlisted)
+	r.tick(end)
+	got := r.store.get(o.ID)
+	assert.Equal(t, order.Expired, got.Status)
+	assert.Nil(t, got.next, "the window is over")
+	assert.Equal(t, []audit.Kind{audit.RPCError, audit.RPCError, audit.OrderExpired}, r.store.kinds(o.ID))
+}
+
+// Any other poll that fails expires nothing, even once the late window is over: a transaction it
+// did not read or apply may pay the order on time.
+func TestWatcherExpiresNothingOnAFailedPoll(t *testing.T) {
+	for name, fail := range map[string]func(r *rig){
+		"rate limited": func(r *rig) {
+			r.chain.FailNext(solanatest.GetSignaturesForAddress, fmt.Errorf("%w: HTTP 429", solana.ErrRateLimited))
+		},
+		"not fetched": func(r *rig) { r.chain.FailNext(solanatest.GetTransaction, errBoom) },
+		"not applied": func(r *rig) { r.store.fail["Apply"] = errBoom },
+	} {
+		for _, after := range []time.Duration{cfg.ExpiryGrace + time.Second, cfg.LateWindow} {
+			t.Run(fmt.Sprintf("%s %s after the deadline", name, after), func(t *testing.T) {
+				r := newRig(t, cfg)
+				o := r.order()
+				r.chain.Add(o.Reference, paying(o, "sig-1", 10_000_000, due.Add(-time.Second)))
+				fail(r)
+				now := due.Add(after)
+				r.now = now
+
+				_, _ = r.w.RunOnce(t.Context()) // the failure is recorded, as the tests above show
+				assert.Equal(t, order.Pending, r.store.get(o.ID).Status)
+				r.tick(now.Add(cfg.PollInterval))
+				assert.Equal(t, order.Paid, r.store.get(o.ID).Status)
+			})
+		}
+	}
+}
+
+// A failed expiry is recorded, the order is polled again as a pending one, and the tick goes on.
+func TestWatcherGoesOnAfterAFailedExpiry(t *testing.T) {
+	r := newRig(t, cfg)
+	first, second := r.order(), r.order()
+	r.store.find(second.ID).next = new(placed.Add(time.Second))
+	r.store.fail["Expire"] = errBoom
+
+	now := due.Add(cfg.ExpiryGrace + time.Second)
+	assert.Equal(t, 2, r.tick(now))
+	got := r.store.get(first.ID)
+	assert.Equal(t, order.Pending, got.Status)
+	assert.Equal(t, new(now.Add(cfg.PollInterval)), got.next)
+	assert.Equal(t, []audit.Kind{audit.WatcherError}, r.store.kinds(first.ID))
+	assert.Equal(t, order.Expired, r.store.get(second.ID).Status)
+}
+
+// Each tick ends the polling of the orders whose late window is over, which their last poll does
+// not do if it came after the window ended.
+func TestWatcherStopsPollingOrdersPastTheirWindow(t *testing.T) {
+	r := newRig(t, cfg)
+	over, open := r.order(), r.order()
+	r.store.find(over.ID).Status = order.Expired
+	p := r.store.find(open.ID)
+	p.Status, p.ExpiresAt, p.next = order.Expired, due.Add(time.Second), new(due.Add(2*cfg.LateWindow))
+
+	assert.Zero(t, r.tick(due.Add(cfg.LateWindow)))
+	assert.Nil(t, r.store.get(over.ID).next)
+	assert.NotNil(t, r.store.get(open.ID).next, "in its window, though not due")
+}
+
+func TestWatcherGoesOnWhenItCannotStopPolling(t *testing.T) {
+	r := newRig(t, cfg)
+	r.order()
+	r.store.fail["StopPolling"] = errBoom
+
+	assert.Equal(t, 1, r.tick(placed.Add(time.Minute)))
+	assert.Equal(t, []audit.Event{{
+		Kind: audit.WatcherError, Message: "watcher failed", Data: map[string]any{"error": "boom"},
+	}}, r.store.events)
 }

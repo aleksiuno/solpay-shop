@@ -17,6 +17,8 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/payment"
 )
 
+var _ payment.Store = (*Payments)(nil)
+
 // Payments stores the payment ledger and what payments do to orders. Like Orders, every change it
 // makes is one transaction that also saves the change's events, and it logs those events only
 // after the commit.
