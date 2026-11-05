@@ -29,7 +29,10 @@ type Deps struct {
 	// ExpiryGrace is how long after its deadline the watcher still polls a pending order before it
 	// expires it, as payment.Config has it. An underpaid order's page reloads itself as long.
 	ExpiryGrace time.Duration
-	Log         *slog.Logger
+	// ProductAdmin and ProductFiles serve the admin pages.
+	ProductAdmin ProductAdmin
+	ProductFiles FileLister
+	Log          *slog.Logger
 }
 
 // Products lists and finds products. *product.Service is one.
@@ -80,7 +83,9 @@ func Register(mux *http.ServeMux, d Deps) {
 // one that does not parse fails every test.
 func parsePages() map[string]*template.Template {
 	pages := map[string]*template.Template{}
-	for _, name := range []string{"home.html", "product.html", "order.html", "error.html"} {
+	for _, name := range []string{
+		"home.html", "product.html", "order.html", "error.html", "admin_products.html", "admin_product_form.html",
+	} {
 		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
 	}
 	return pages

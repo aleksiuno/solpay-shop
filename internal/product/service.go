@@ -87,7 +87,7 @@ func (s *Service) check(p Product) (Product, error) {
 		return Product{}, fmt.Errorf("product: check file %s: %w", p.FileName, err)
 	}
 	if !ok {
-		return Product{}, &ValidationError{"file_name", "no such file in the files directory"}
+		return Product{}, &ValidationError{"file_name", "is not in the files directory"}
 	}
 	return p, nil
 }

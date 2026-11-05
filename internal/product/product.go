@@ -82,11 +82,17 @@ func (p Product) Validate() error {
 		return &ValidationError{"price_lamports", fmt.Sprintf("must be from 1 to %d lamports", MaxPriceLamports)}
 	case p.FileName == "":
 		return &ValidationError{"file_name", "is required"}
-	case !filePattern.MatchString(p.FileName):
+	case !ValidFileName(p.FileName):
 		return &ValidationError{"file_name",
 			"must be a bare file name of at most 255 letters, digits, dots, hyphens and underscores, starting with a letter or digit"}
 	}
 	return nil
+}
+
+// ValidFileName reports whether s has the form of a product's file name: a bare name of at most
+// 255 letters, digits, dots, hyphens and underscores, starting with a letter or a digit.
+func ValidFileName(s string) bool {
+	return filePattern.MatchString(s)
 }
 
 // ValidSlug reports whether s has the form of a slug: the letters a-z and the digits 0-9, in
