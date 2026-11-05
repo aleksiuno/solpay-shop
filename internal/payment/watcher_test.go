@@ -1,8 +1,11 @@
 package payment_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -75,6 +78,12 @@ func paying(o order.Order, sig string, lamports int64, at time.Time) solana.Tx {
 		Post:         []int64{10_000_000_000 - fee - lamports, lamports, 1, 0},
 		Instructions: []solana.Instruction{transfer(merchantIdx, uint64(lamports), referenceIdx)},
 	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	assert.Equal(t, payment.Config{
+		PollInterval: 7 * time.Second, Batch: 8, SignatureLimit: 100, LateWindow: time.Hour, RPCTimeout: 10 * time.Second,
+	}, payment.DefaultConfig(7*time.Second))
 }
 
 func TestWatcherCreditsAPayment(t *testing.T) {
@@ -249,4 +258,69 @@ func TestWatcherEndsTheTickOnAFailure(t *testing.T) {
 			assert.Equal(t, new(now.Add(cfg.PollInterval)), r.store.get(second.ID).next)
 		})
 	}
+}
+
+func TestWatcherRejectsAFailedTransactionWithoutFetchingIt(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	tx := paying(o, "sig-1", 10_000_000, placed.Add(time.Minute))
+	tx.Failed = true
+	r.chain.Add(o.Reference, tx)
+
+	r.tick(placed.Add(2 * time.Minute))
+	assert.Zero(t, r.chain.Calls(solanatest.GetTransaction))
+	assert.Equal(t, payment.TxFailed, r.store.ledger["sig-1"].Reason)
+	assert.Equal(t, order.Pending, r.store.get(o.ID).Status)
+	assert.Equal(t, []audit.Kind{audit.PaymentSeen, audit.PaymentInvalidTx}, r.store.kinds(o.ID))
+}
+
+// A transaction the node can never return is recorded as unfetchable, and the tick goes on.
+func TestWatcherRejectsAnUnfetchableTransaction(t *testing.T) {
+	r := newRig(t, cfg)
+	first, second := r.order(), r.order()
+	r.store.find(second.ID).next = new(placed.Add(time.Second))
+	r.chain.Add(first.Reference, paying(first, "sig-1", 10_000_000, placed))
+	r.chain.Add(second.Reference, paying(second, "sig-2", 10_000_000, placed))
+	r.chain.FailNext(solanatest.GetTransaction, fmt.Errorf("%w: unsupported version", solana.ErrPermanent))
+
+	assert.Equal(t, 2, r.tick(placed.Add(time.Minute)))
+	assert.Equal(t, payment.Unfetchable, r.store.ledger["sig-1"].Reason)
+	assert.Equal(t, order.Pending, r.store.get(first.ID).Status)
+	require.Equal(t, []audit.Kind{audit.PaymentSeen, audit.PaymentInvalidTx}, r.store.kinds(first.ID))
+	assert.Equal(t, map[string]any{"reason": "unfetchable", "error": "solana: permanent failure: unsupported version"}, r.store.events[1].Data)
+	assert.Equal(t, order.Paid, r.store.get(second.ID).Status)
+}
+
+// A transaction the node lists but cannot return yet is left for the next poll, and the poll goes
+// on to the others; it counts once the node returns it.
+func TestWatcherWaitsForAListedTransaction(t *testing.T) {
+	r := newRig(t, cfg)
+	o := r.order()
+	r.chain.Add(o.Reference, paying(o, "sig-1", 4_000_000, placed))
+	r.chain.Add(o.Reference, paying(o, "sig-2", 6_000_000, placed.Add(time.Minute)))
+	r.chain.NotFound("sig-1", 1)
+
+	now := placed.Add(2 * time.Minute)
+	r.tick(now)
+	assert.Equal(t, order.Underpaid, r.store.get(o.ID).Status)
+	assert.NotContains(t, r.store.ledger, "sig-1")
+
+	r.tick(now.Add(cfg.PollInterval))
+	assert.Equal(t, order.Paid, r.store.get(o.ID).Status)
+	assert.Equal(t, 3, r.chain.Calls(solanatest.GetTransaction))
+}
+
+// A call that the node does not answer gives up after RPCTimeout and ends the tick.
+func TestWatcherTimesOutACall(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRig(t, cfg)
+		r.order()
+		r.chain.BlockUntilDone(solanatest.GetSignaturesForAddress)
+		r.now = placed.Add(time.Minute)
+
+		start := time.Now()
+		_, err := r.w.RunOnce(t.Context())
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, cfg.RPCTimeout, time.Since(start))
+	})
 }

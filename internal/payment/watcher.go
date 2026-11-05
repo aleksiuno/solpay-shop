@@ -16,6 +16,8 @@ import (
 type Chain interface {
 	// Signatures lists up to limit transactions that mention reference, newest first.
 	Signatures(ctx context.Context, reference string, limit int) ([]solana.SignatureInfo, error)
+	// Transaction fetches a transaction. It returns solana.ErrNotFound while the node has not
+	// indexed it, and solana.ErrPermanent when asking again cannot help.
 	Transaction(ctx context.Context, signature string) (solana.Tx, error)
 }
 
@@ -44,6 +46,8 @@ type Config struct {
 	// LateWindow is how long after its deadline an underpaid or expired order is still polled, so
 	// that a late payment is seen and the order can be refunded.
 	LateWindow time.Duration
+	// RPCTimeout bounds each call to the node, the wait for its rate limiter included.
+	RPCTimeout time.Duration
 }
 
 // DefaultConfig returns the shop's watcher settings, polling every pollInterval.
@@ -53,6 +57,7 @@ func DefaultConfig(pollInterval time.Duration) Config {
 		Batch:          8,
 		SignatureLimit: 100,
 		LateWindow:     time.Hour,
+		RPCTimeout:     10 * time.Second,
 	}
 }
 
@@ -94,9 +99,14 @@ func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 }
 
 // poll asks the node for the transactions that list o's reference, and applies each one that the
-// ledger does not have yet, oldest first.
+// ledger does not have yet, oldest first. One that the node lists but cannot return yet is left for
+// the next poll.
 func (w *Watcher) poll(ctx context.Context, o order.Order, now time.Time) error {
-	listed, err := w.chain.Signatures(ctx, o.Reference, w.cfg.SignatureLimit)
+	var listed []solana.SignatureInfo
+	err := w.rpc(ctx, func(ctx context.Context) (err error) {
+		listed, err = w.chain.Signatures(ctx, o.Reference, w.cfg.SignatureLimit)
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -113,6 +123,9 @@ func (w *Watcher) poll(ctx context.Context, o order.Order, now time.Time) error 
 			continue
 		}
 		c, err := w.candidate(ctx, o, s)
+		if errors.Is(err, solana.ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -123,13 +136,34 @@ func (w *Watcher) poll(ctx context.Context, o order.Order, now time.Time) error 
 	return nil
 }
 
-// candidate fetches the transaction s and returns it with Verify's verdict on it as a payment to o.
+// candidate returns the transaction s with Verify's verdict on it as a payment to o. A failed
+// transaction is rejected without being fetched, and one that the node can never return is
+// rejected as unfetchable. Any other error from the node is returned.
 func (w *Watcher) candidate(ctx context.Context, o order.Order, s solana.SignatureInfo) (Candidate, error) {
 	c := Candidate{Signature: s.Signature, Slot: s.Slot, BlockTime: s.BlockTime}
-	tx, err := w.chain.Transaction(ctx, s.Signature)
-	if err != nil {
-		return Candidate{}, err
+	if s.Failed {
+		c.Verdict.Reason = TxFailed
+		return c, nil
 	}
-	c.Verdict = Verify(tx, w.merchant, o.Reference)
+	var tx solana.Tx
+	err := w.rpc(ctx, func(ctx context.Context) (err error) {
+		tx, err = w.chain.Transaction(ctx, s.Signature)
+		return err
+	})
+	switch {
+	case errors.Is(err, solana.ErrPermanent):
+		c.Verdict.Reason, c.Err = Unfetchable, err.Error()
+	case err != nil:
+		return Candidate{}, err
+	default:
+		c.Verdict = Verify(tx, w.merchant, o.Reference)
+	}
 	return c, nil
+}
+
+// rpc makes call, one call to the node, with cfg.RPCTimeout as its deadline.
+func (w *Watcher) rpc(ctx context.Context, call func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, w.cfg.RPCTimeout)
+	defer cancel()
+	return call(ctx)
 }
