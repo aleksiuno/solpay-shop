@@ -66,7 +66,7 @@ func TestHealthWhenTheDatabaseDoesNotAnswer(t *testing.T) {
 
 func TestAdminAPIAnswersAnUnknownPathWithNotFound(t *testing.T) {
 	mux := http.NewServeMux()
-	httpapi.RegisterAdmin(mux)
+	httpapi.RegisterAdmin(mux, httpapi.Deps{})
 	for _, path := range []string{"/api/v1/admin/", "/api/v1/admin/no-such-endpoint", "/api/v1/admin/a/b"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			w := serve(mux, httptest.NewRequest(method, path, nil))
@@ -110,7 +110,7 @@ func TestUnknownAPIPaths(t *testing.T) {
 
 func TestAdminAPIAnswersAWrongMethodWithMethodNotAllowed(t *testing.T) {
 	mux := http.NewServeMux()
-	httpapi.RegisterAdmin(mux)
+	httpapi.RegisterAdmin(mux, httpapi.Deps{})
 	mux.HandleFunc("POST /api/v1/admin/orders/{id}/refund", func(http.ResponseWriter, *http.Request) {})
 	w := serve(mux, httptest.NewRequest(http.MethodGet, "/api/v1/admin/orders/1/refund", nil))
 

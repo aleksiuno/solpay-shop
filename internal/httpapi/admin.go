@@ -7,7 +7,11 @@ import (
 
 // RegisterAdmin adds the admin API routes to mux, which the caller guards with BasicAuth. A path
 // under /api/v1/admin/ that no route serves gets a JSON envelope, as under /api/v1/.
-func RegisterAdmin(mux *http.ServeMux) {
+func RegisterAdmin(mux *http.ServeMux, d Deps) {
+	a := api{d}
+	mux.HandleFunc("GET /api/v1/admin/products", a.listAdminProducts)
+	mux.HandleFunc("POST /api/v1/admin/products", a.createProduct)
+	mux.HandleFunc("PUT /api/v1/admin/products/{id}", a.updateProduct)
 	mux.Handle("/api/v1/admin/", unknown(mux, "/api/v1/admin/"))
 }
 
