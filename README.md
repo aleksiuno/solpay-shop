@@ -18,11 +18,11 @@ docker compose up --build -d     # or make up; the app is ready a few seconds la
 curl localhost:8080/healthz      # prints ok
 ```
 
-Then open <http://localhost:8080>, pick a product and check out. The order page shows how to pay:
-an "Open in wallet" link, the address, the amount, the reference and the devpay command that pays
-it (see below). It reloads itself every 5 seconds until the payment is found, then shows the
-download link. A reload clears a text selection, so to copy the payment URL, copy the "Open in
-wallet" link.
+Then open <http://localhost:8080>, pick a product and check out. The order page shows how to pay: a
+QR code for a wallet to scan, an "Open in wallet" link, the address, the amount, the reference and
+the devpay command that pays it (see below). It reloads itself every 5 seconds until the payment is
+found, then shows the download link. A reload clears a text selection, so to copy the payment URL,
+copy the "Open in wallet" link.
 
 `make env` prints the ways to get a devnet address; the shop needs only the address, never the
 secret key. One of them needs only Docker: it runs this repository's devpay command in the Go

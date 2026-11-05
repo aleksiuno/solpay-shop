@@ -32,6 +32,7 @@ button, .button {
 }
 .problem { color: var(--bad); font-weight: 600; }
 .notice { color: var(--muted); }
+.qr { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .banner { padding: 0.75rem 1rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 0.375rem; }
 .pay { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 1rem; }
 .pay dt { font-weight: 600; }
