@@ -12,7 +12,7 @@ import (
 // the payment watcher saw. The log is append-only, and nothing reads it to decide an order's state.
 type Event struct {
 	ID        int64      // set by the database
-	OrderID   *uuid.UUID // nil for an event that concerns no order, such as an RPC error
+	OrderID   *uuid.UUID // nil for an event that concerns no order, such as a failed check of the cluster
 	Kind      Kind
 	Message   string // one line for people
 	Signature string // the transaction signature the event is about, or ""

@@ -120,8 +120,8 @@ func (l *loader) databaseURL(key string) string {
 	return v
 }
 
-// rpcURL allows plain http only to a local validator: the watcher marks orders paid on the RPC
-// node's word, and a keyed URL would send its key in clear text.
+// rpcURL allows plain http only to a loopback host, such as a local proxy to devnet: the watcher
+// marks orders paid on the RPC node's word, and a keyed URL would send its key in clear text.
 func (l *loader) rpcURL(key, def string) string {
 	v := l.optional(key, def)
 	u, err := url.Parse(v)
