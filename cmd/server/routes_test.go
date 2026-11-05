@@ -134,12 +134,14 @@ func TestPublicRoutesNeedNoCredentials(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "Nothing is for sale yet.", "the shop's home page")
 }
 
-// A cross-site form cannot place an order: the refusal comes before the order service, which
-// newRouter leaves unset.
+// A cross-site form cannot place an order, through the API or the shop's checkout: the refusal
+// comes before the order service, which newRouter leaves unset.
 func TestCrossSiteOrdersAreRefused(t *testing.T) {
-	w := request(newRouter(), http.MethodPost, "/api/v1/orders", crossSite)
-	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Equal(t, "forbidden", errorCode(t, w))
+	for _, path := range []string{"/api/v1/orders", "/checkout"} {
+		w := request(newRouter(), http.MethodPost, path, crossSite)
+		assert.Equal(t, http.StatusForbidden, w.Code, path)
+		assert.Equal(t, "forbidden", errorCode(t, w), path)
+	}
 }
 
 // A download link that the shop did not sign is refused in plain text, before the store is read.

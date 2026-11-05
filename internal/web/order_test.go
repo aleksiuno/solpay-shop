@@ -17,10 +17,23 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
-// orders holds one order, which Get finds by its id. A set err is returned instead.
+// orders holds one order, which Create returns and Get finds by its id. A set err is returned by
+// every call instead. It notes what Create was asked for, and how often it was called.
 type orders struct {
-	order order.Order
-	err   error
+	order   order.Order
+	err     error
+	slug    string
+	qty     int
+	creates int
+}
+
+func (s *orders) Create(_ context.Context, slug string, qty int) (order.Order, error) {
+	s.creates++
+	s.slug, s.qty = slug, qty
+	if s.err != nil {
+		return order.Order{}, s.err
+	}
+	return s.order, nil
 }
 
 func (s *orders) Get(_ context.Context, id uuid.UUID) (order.Order, error) {

@@ -2,7 +2,15 @@
 <h1>{{.Product.Title}}</h1>
 <p>{{.Product.Description}}</p>
 <p class="price">{{sol .Product.PriceLamports}} SOL per licence</p>
-{{if not .Product.Active}}
+{{if .Product.Active}}
+{{with .Problem}}<p class="problem" role="alert">{{.}}</p>{{end}}
+<form class="checkout" method="post" action="/checkout">
+<input type="hidden" name="product" value="{{.Product.Slug}}">
+<label for="quantity">Licences</label>
+<input id="quantity" name="quantity" type="number" min="{{.Min}}" max="{{.Max}}" value="{{.Quantity}}" required>
+<button type="submit">Check out</button>
+</form>
+{{else}}
 <p class="notice">This product is no longer for sale.</p>
 {{end}}
 <p><a href="/">All products</a></p>

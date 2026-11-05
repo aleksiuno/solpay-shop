@@ -38,8 +38,9 @@ type Products interface {
 	GetBySlug(ctx context.Context, slug string) (product.Product, error)
 }
 
-// Orders gets orders. *order.Service is one.
+// Orders places and gets orders. *order.Service is one.
 type Orders interface {
+	Create(ctx context.Context, slug string, qty int) (order.Order, error)
 	Get(ctx context.Context, id uuid.UUID) (order.Order, error)
 }
 
@@ -69,6 +70,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /static/style.css", styles)
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /p/{slug}", s.product)
+	mux.HandleFunc("POST /checkout", s.checkout)
 	mux.HandleFunc("GET /orders/{id}", s.order)
 	mux.HandleFunc("GET /d/{id}", s.download)
 }
