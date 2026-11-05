@@ -1,0 +1,26 @@
+{{define "content"}}
+<h1>Orders</h1>
+<form class="filter" method="get" action="/admin/orders">
+<label for="status">Status</label>
+<select id="status" name="status">
+<option value="">All</option>
+{{- range .Statuses}}
+<option{{if eq . $.Status}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select>
+<button type="submit">Show</button>
+</form>
+<div class="table-scroll">
+<table class="list">
+<thead><tr><th>Created</th><th>Product</th><th>Licences</th><th>Amount</th><th>Received</th><th>Status</th><th>Flags</th></tr></thead>
+<tbody>
+{{- range .Orders}}
+<tr><td><a href="/admin/orders/{{.ID}}">{{utc .CreatedAt}}</a></td><td>{{.ProductTitle}}</td><td>{{.Quantity}}</td><td>{{sol .AmountLamports}} SOL</td><td>{{sol .ReceivedLamports}} SOL</td><td>{{.Status}}</td><td>{{range $i, $f := .Flags}}{{if $i}}, {{end}}<span class="flag">{{$f}}</span>{{end}}</td></tr>
+{{- else}}
+<tr><td colspan="7">No orders.</td></tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+<p class="notice">The newest {{len .Orders}} orders; the list shows at most 100.</p>
+{{end}}

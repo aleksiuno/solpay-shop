@@ -33,6 +33,9 @@ const maxProductForm = 64 << 10
 // RegisterAdmin adds the admin pages to mux, which the caller guards with BasicAuth.
 func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	s := site{Deps: d, pages: parsePages()}
+	mux.Handle("GET /admin/{$}", http.RedirectHandler("/admin/orders", http.StatusFound))
+	mux.HandleFunc("GET /admin/orders", s.adminOrders)
+	mux.HandleFunc("GET /admin/orders/{id}", s.adminOrderPage)
 	mux.HandleFunc("GET /admin/products", s.adminProducts)
 	mux.HandleFunc("GET /admin/products/new", s.newProduct)
 	mux.HandleFunc("POST /admin/products", s.createProduct)
