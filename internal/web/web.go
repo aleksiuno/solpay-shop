@@ -72,6 +72,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /p/{slug}", s.product)
 	mux.HandleFunc("POST /checkout", s.checkout)
 	mux.HandleFunc("GET /orders/{id}", s.order)
+	mux.HandleFunc("GET /orders/{id}/qr.png", s.orderQR)
 	mux.HandleFunc("GET /d/{id}", s.download)
 }
 
