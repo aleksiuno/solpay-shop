@@ -18,6 +18,12 @@ docker compose up --build -d     # or make up; the app is ready a few seconds la
 curl localhost:8080/healthz      # prints ok
 ```
 
+Then open <http://localhost:8080>, pick a product and check out. The order page shows how to pay:
+an "Open in wallet" link, the address, the amount, the reference and the devpay command that pays
+it (see below). It reloads itself every 5 seconds until the payment is found, then shows the
+download link. A reload clears a text selection, so to copy the payment URL, copy the "Open in
+wallet" link.
+
 `make env` prints the ways to get a devnet address; the shop needs only the address, never the
 secret key. One of them needs only Docker: it runs this repository's devpay command in the Go
 image, which writes a keypair to `data/` and prints its address. Without `make`, run
@@ -33,8 +39,8 @@ Compose starts Postgres, applies the migrations, loads two demo products and sta
 ## Paying on devnet
 
 Each order asks for payment with a Solana Pay URL,
-`solana:<MERCHANT>?amount=<SOL>&reference=<REF>`, which `POST /api/v1/orders` returns
-([docs/API.md](docs/API.md)), and the shop will find the payment by its reference alone: the wallet
+`solana:<MERCHANT>?amount=<SOL>&reference=<REF>`, which the order page shows and
+`POST /api/v1/orders` returns ([docs/API.md](docs/API.md)), and the shop will find the payment by its reference alone: the wallet
 must attach the reference to the transfer as an extra account, so a plain Send to the merchant
 address, or `solana transfer`, will not be detected. devpay, a small command in this repository,
 pays such a URL on devnet with the reference attached.
