@@ -75,3 +75,10 @@ UPDATE orders
 SET status = @to_status, updated_at = now()
 WHERE id = @id AND status = @from_status AND expires_at < @cutoff
 RETURNING expires_at;
+
+-- name: FulfilOrder :execrows
+-- Marks the order fulfilled. Like RefundOrder, it changes only an order still in from_status, so
+-- of two first downloads at once, only one changes the row.
+UPDATE orders
+SET status = @to_status, fulfilled_at = @fulfilled_at, updated_at = now()
+WHERE id = @id AND status = @from_status;
