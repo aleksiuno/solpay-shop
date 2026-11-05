@@ -34,9 +34,10 @@ change.
 |---|---|---|
 | `invalid_request` | 400 | the body is empty, larger than 64 KiB or not one JSON object, or has an unknown field or a value of the wrong type (such as a quantity that is not a whole number) |
 | `validation_failed` | 422 | a value is out of range, such as a quantity outside 1 to 10, or a required field is missing |
-| `not_found` | 404 | no product has the slug, no order has the id (or the id is not a UUID), or no endpoint has the path |
+| `not_found` | 404 | no product has the slug or id, no order has the id (or the id is not a UUID), or no endpoint has the path |
 | `method_not_allowed` | 405 | the path exists, but not with this method; the `Allow` header lists the methods it has |
 | `product_inactive` | 409 | an order for a product that is no longer for sale |
+| `slug_taken` | 409 | an admin create or update with a slug that another product has |
 | `unauthorized` | 401 | an admin path without the right basic auth credentials |
 | `forbidden` | 403 | a browser request from another origin with an unsafe method |
 | `internal` | 500 | anything else; the details are logged, never sent |
@@ -176,6 +177,48 @@ download can resume while its link does. The first `GET` of a paid order moves i
 | `403` | the shop did not make the link, or its order or expiry was changed; or the order is not paid, or was refunded |
 | `410` | the link has expired; read the order again for a new one |
 | `404` | the order or its file is not there; the order stays as it was |
+
+## Admin endpoints
+
+These need basic auth with `ADMIN_USER` and `ADMIN_PASS`. The admin pages under `/admin/` do the
+same in a browser.
+
+### `GET /api/v1/admin/products`
+
+Lists every product, those no longer for sale included, sorted by slug. Each product is as in
+`GET /api/v1/products`, with `file_name`, the file in `FILES_DIR` that it sells.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/products
+```
+
+### `POST /api/v1/admin/products`
+
+Creates a product and answers `201 Created` with it.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/products -d '{
+  "slug": "go-payments-checklist-team", "title": "Go payments checklist, team licence",
+  "description": "The checklist, for a team.", "price_lamports": 20000000,
+  "file_name": "go-payments-checklist.md", "active": true}'
+```
+
+- `slug` is 1 to 64 characters of `a-z` and `0-9`, in groups joined by single hyphens, and no other
+  product may have it.
+- `title` is 1 to 120 characters, and `description` at most 2,000; spaces around both are dropped.
+- `price_lamports` is the price of one licence, from 1 to 1,000,000,000,000 (1,000 SOL).
+- `file_name` names a file in `FILES_DIR`. A product not for sale may keep the file it has after
+  the file has gone, so that it can be taken off sale.
+- `active` says whether the product is for sale.
+
+Every field is required but `description`. Errors: `400 invalid_request`; `422 validation_failed`,
+naming one field that is not acceptable: `active` if it is missing, otherwise the first in the
+order above; `409 slug_taken`.
+
+### `PUT /api/v1/admin/products/{id}`
+
+Replaces every field of the product with the id, with a body as for `POST`, and answers `200` with
+the product. Errors: as for `POST`, and `404 not_found` for an unknown id or one that is not a UUID.
 
 ## Walkthrough
 
