@@ -13,15 +13,16 @@ import (
 
 // Codes of the JSON error envelope. Clients may rely on them: a code never changes its meaning.
 const (
-	codeInvalidRequest   = "invalid_request"
-	codeValidationFailed = "validation_failed"
-	codeNotFound         = "not_found"
-	codeMethodNotAllowed = "method_not_allowed"
-	codeProductInactive  = "product_inactive"
-	codeSlugTaken        = "slug_taken"
-	codeUnauthorized     = "unauthorized"
-	codeForbidden        = "forbidden"
-	codeInternal         = "internal"
+	codeInvalidRequest    = "invalid_request"
+	codeValidationFailed  = "validation_failed"
+	codeNotFound          = "not_found"
+	codeMethodNotAllowed  = "method_not_allowed"
+	codeProductInactive   = "product_inactive"
+	codeSlugTaken         = "slug_taken"
+	codeInvalidTransition = "invalid_transition"
+	codeUnauthorized      = "unauthorized"
+	codeForbidden         = "forbidden"
+	codeInternal          = "internal"
 )
 
 // errorBody is the JSON error envelope: {"error": {"code": "...", "message": "..."}}. The code is
@@ -66,6 +67,12 @@ func (a api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusUnprocessableEntity, codeValidationFailed, invalidProduct.Field+" "+invalidProduct.Reason)
 	case errors.Is(err, product.ErrSlugTaken):
 		writeError(w, http.StatusConflict, codeSlugTaken, "another product has this slug")
+	case errors.Is(err, order.ErrNoLatePayment):
+		writeError(w, http.StatusConflict, codeInvalidTransition, "an expired order can be refunded only after a late payment")
+	case errors.Is(err, order.ErrInvalidTransition):
+		writeError(w, http.StatusConflict, codeInvalidTransition, "the order's status does not allow it")
+	case errors.Is(err, order.ErrStaleState):
+		writeError(w, http.StatusConflict, codeInvalidTransition, "the order changed meanwhile; read it again")
 	case errors.Is(err, product.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, "no such product")
 	case errors.Is(err, order.ErrNotFound):

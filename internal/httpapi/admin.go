@@ -12,6 +12,7 @@ func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /api/v1/admin/products", a.listAdminProducts)
 	mux.HandleFunc("POST /api/v1/admin/products", a.createProduct)
 	mux.HandleFunc("PUT /api/v1/admin/products/{id}", a.updateProduct)
+	mux.HandleFunc("POST /api/v1/admin/orders/{id}/refund", a.refundAdminOrder)
 	mux.Handle("/api/v1/admin/", unknown(mux, "/api/v1/admin/"))
 }
 
