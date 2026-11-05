@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -80,6 +82,13 @@ func serve(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
 
 func get(h http.Handler, path string) *httptest.ResponseRecorder {
 	return serve(h, httptest.NewRequest(http.MethodGet, path, nil))
+}
+
+// post sends form to path as a browser's form does.
+func post(h http.Handler, path string, form url.Values) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return serve(h, r)
 }
 
 // requirePage requires w to be an HTML page with status.
