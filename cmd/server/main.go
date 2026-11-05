@@ -21,6 +21,7 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
 	"github.com/aleksiuno/solpay-shop/internal/order"
+	"github.com/aleksiuno/solpay-shop/internal/payment"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 	"github.com/aleksiuno/solpay-shop/internal/solana"
 )
@@ -28,9 +29,10 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-// shutdownTimeout stays below Docker's default 10 s stop grace period, so a shutdown that times
-// out is still logged before the container is killed.
-const shutdownTimeout = 8 * time.Second
+// shutdownTimeout bounds the HTTP server's shutdown. With up to 2 s for the payment watcher to stop
+// after it, the whole shutdown stays below Docker's default 10 s stop grace period, so one that
+// times out is still logged before the container is killed.
+const shutdownTimeout = 7 * time.Second
 
 func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply pending database migrations and exit")
@@ -107,11 +109,36 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	products := product.NewService(db.NewProducts(pool), files)
 	events := audit.NewRecorder(db.NewEvents(pool), logger)
 	orders := order.NewService(db.NewOrders(pool, events), products, cfg.OrderTTL, solana.NewReference, now)
+	chain, err := solana.New(cfg.SolanaRPCURL)
+	if err != nil {
+		return err
+	}
+	watcher := payment.NewWatcher(chain, db.NewPayments(pool, events), events, cfg.MerchantAddress,
+		payment.DefaultConfig(cfg.PollInterval), now)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
 		return err
+	}
+
+	// The watcher has a context of its own, so that it keeps running while the server shuts down
+	// and stops only after it, before the pool closes. stopWatcher stops it and returns the error
+	// it stopped with; every return below calls it.
+	watchCtx, cancelWatcher := context.WithCancel(context.WithoutCancel(ctx))
+	var watchErr error
+	watchDone := make(chan struct{}) // closed once watchErr is set
+	go func() {
+		defer close(watchDone)
+		watchErr = watcher.Run(watchCtx)
+	}()
+	stopWatcher := func() error {
+		cancelWatcher()
+		<-watchDone
+		if watchErr != nil {
+			return fmt.Errorf("payment watcher: %w", watchErr)
+		}
+		return nil
 	}
 
 	// The requests' contexts, which a shutdown that times out cancels. pool.Close waits for every
@@ -136,25 +163,30 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	go func() { serveErr <- srv.Serve(ln) }()
 	logger.InfoContext(ctx, "server started", "addr", ln.Addr().String())
 
+	// The watcher returns early only when it cannot work, such as on a node that is not devnet.
+	// The server then shuts down as on a signal, and exits with the watcher's error.
 	select {
 	case err := <-serveErr:
-		return fmt.Errorf("serve: %w", err)
+		return errors.Join(fmt.Errorf("serve: %w", err), stopWatcher())
+	case <-watchDone:
+		logger.InfoContext(ctx, "shutting down", "cause", stopWatcher())
 	case <-ctx.Done():
+		logger.InfoContext(ctx, "shutting down", "cause", context.Cause(ctx))
 	}
 
-	logger.InfoContext(ctx, "shutting down", "cause", context.Cause(ctx))
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Ends the requests still running and their queries, then their connections.
 		cancelRequests()
-		return errors.Join(fmt.Errorf("shutdown: %w", err), srv.Close())
+		return errors.Join(fmt.Errorf("shutdown: %w", err), srv.Close(), stopWatcher())
 	}
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
+		return errors.Join(fmt.Errorf("serve: %w", err), stopWatcher())
 	}
+	err = stopWatcher()
 	logger.InfoContext(ctx, "server stopped")
-	return nil
+	return err
 }
 
 // now returns the time in UTC, truncated to the microseconds that Postgres stores, so the times an
