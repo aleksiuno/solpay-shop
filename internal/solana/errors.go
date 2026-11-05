@@ -46,6 +46,7 @@ func classify(err error) error {
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
 	}
 	if re, ok := errors.AsType[*jsonrpc.RPCError](err); ok {
+		err = &jsonRPCError{rpc: re, err: err}
 		switch re.Code {
 		case http.StatusTooManyRequests:
 			return fmt.Errorf("%w: %w", ErrRateLimited, err)
@@ -59,3 +60,16 @@ func classify(err error) error {
 	}
 	return err
 }
+
+// jsonRPCError words a JSON-RPC error by its code and message. solana-go's own message for it is a
+// debug dump, with a pointer in it. It unwraps to the error it rewords.
+type jsonRPCError struct {
+	rpc *jsonrpc.RPCError
+	err error
+}
+
+func (e *jsonRPCError) Error() string {
+	return fmt.Sprintf("JSON-RPC error %d: %s", e.rpc.Code, e.rpc.Message)
+}
+
+func (e *jsonRPCError) Unwrap() error { return e.err }

@@ -207,6 +207,25 @@ func TestErrorClasses(t *testing.T) {
 	}
 }
 
+// A JSON-RPC error is worded by its code and message.
+func TestJSONRPCErrorMessages(t *testing.T) {
+	tests := map[string]struct {
+		body string
+		want string
+	}{
+		"transient":    {rpcError(-32005, "Node is unhealthy"), "JSON-RPC error -32005: Node is unhealthy"},
+		"rate limited": {rpcError(429, "Too many requests"), "solana: rate limited: JSON-RPC error 429: Too many requests"},
+	}
+	for name, tt := range tests {
+		for call, do := range calls {
+			t.Run(name+"/"+call, func(t *testing.T) {
+				n := node{status: http.StatusOK, body: tt.body}
+				assert.EqualError(t, do(t.Context(), serve(t, &n)), tt.want)
+			})
+		}
+	}
+}
+
 func TestTransactionErrorClasses(t *testing.T) {
 	tests := map[string]struct {
 		node node
