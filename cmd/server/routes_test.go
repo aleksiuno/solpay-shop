@@ -15,8 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
+	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
 	"github.com/aleksiuno/solpay-shop/internal/product"
+	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
 const (
@@ -45,9 +47,12 @@ func (panicker) Ping(context.Context) error { panic("boom") }
 var cfg = config.Config{AdminUser: adminUser, AdminPass: adminPass}
 
 // newRouter returns the server's real handler, with test credentials and a database that answers.
+// Its download service has no store and no files, which a link it did not sign never reaches.
 func newRouter() http.Handler {
 	log := slog.New(slog.DiscardHandler)
-	return routes(cfg, log, httpapi.Deps{DB: pinger{}, Products: catalogue{}, Log: log})
+	downloads := download.NewService(nil, nil, []byte("test-only-download-secret-0123456789"), now)
+	return routes(cfg, log, web.Deps{Downloads: downloads, Log: log},
+		httpapi.Deps{DB: pinger{}, Products: catalogue{}, Log: log})
 }
 
 func request(h http.Handler, method, path string, prepare ...func(*http.Request)) *httptest.ResponseRecorder {
@@ -133,6 +138,18 @@ func TestCrossSiteOrdersAreRefused(t *testing.T) {
 	assert.Equal(t, "forbidden", errorCode(t, w))
 }
 
+// A download link that the shop did not sign is refused in plain text, before the store is read.
+// A link followed from another site, such as a mail, reaches the download, since GET is safe.
+func TestForgedDownloadLinksAreRefused(t *testing.T) {
+	h := newRouter()
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		w := request(h, method, "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e?exp=1793534400&sig=c2lnbmF0dXJl", crossSite)
+		assert.Equal(t, http.StatusForbidden, w.Code, method)
+		assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), "the download's refusal")
+		assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"), method)
+	}
+}
+
 func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
 	h := newRouter()
 	w := request(h, http.MethodGet, "/api/v1/no-such-endpoint")
@@ -166,7 +183,7 @@ func TestCrossOriginUnsafeRequestsAreRefused(t *testing.T) {
 func TestMiddlewareOrder(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(httpapi.ContextHandler{Handler: slog.NewJSONHandler(&buf, nil)})
-	h := routes(cfg, log, httpapi.Deps{DB: panicker{}, Log: log})
+	h := routes(cfg, log, web.Deps{Log: log}, httpapi.Deps{DB: panicker{}, Log: log})
 	w := request(h, http.MethodGet, "/healthz")
 	refused := request(h, http.MethodPost, "/healthz", crossSite)
 

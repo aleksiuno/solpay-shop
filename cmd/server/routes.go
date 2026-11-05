@@ -6,6 +6,7 @@ import (
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
+	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
 // routes returns the server's handler: the public routes, the admin routes behind basic auth, and
@@ -17,8 +18,9 @@ import (
 // protection refuses a cross-site request with an unsafe method before any route sees it: a
 // browser resends basic credentials on its own, so without it another site could submit a form to
 // an admin route.
-func routes(cfg config.Config, log *slog.Logger, api httpapi.Deps) http.Handler {
+func routes(cfg config.Config, log *slog.Logger, site web.Deps, api httpapi.Deps) http.Handler {
 	public := http.NewServeMux()
+	web.Register(public, site)
 	httpapi.Register(public, api)
 
 	admin := http.NewServeMux()

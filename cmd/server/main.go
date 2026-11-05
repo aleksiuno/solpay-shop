@@ -24,6 +24,7 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/payment"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 	"github.com/aleksiuno/solpay-shop/internal/solana"
+	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -109,6 +110,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	products := product.NewService(db.NewProducts(pool), files)
 	events := audit.NewRecorder(db.NewEvents(pool), logger)
 	orders := order.NewService(db.NewOrders(pool, events), products, cfg.OrderTTL, solana.NewReference, now)
+	downloads := download.NewService(db.NewDownloads(pool, events), files, cfg.DownloadSecret, now)
 	chain, err := solana.New(cfg.SolanaRPCURL)
 	if err != nil {
 		return err
@@ -146,11 +148,12 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	reqCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelRequests()
 
+	site := web.Deps{Downloads: downloads, Log: logger}
 	api := httpapi.Deps{
 		DB: pool, Products: products, Orders: orders, Merchant: cfg.MerchantAddress, Now: now, Log: logger,
 	}
 	srv := &http.Server{
-		Handler:           routes(cfg, logger, api),
+		Handler:           routes(cfg, logger, site, api),
 		BaseContext:       func(net.Listener) context.Context { return reqCtx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
