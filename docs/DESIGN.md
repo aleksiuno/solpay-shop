@@ -42,8 +42,8 @@ packages to implement their storage interfaces, never the other way round, and `
 the pieces together. Within the server, only `internal/solana` imports the Solana SDK: the rest of
 the code works with plain Go types, and tests can swap in a fake client.
 
-Interfaces belong to the code that uses them: the payment watcher will declare the few chain calls
-it needs, and `internal/solana` exports a concrete client and plain types. Test support, the
+Interfaces belong to the code that uses them: the payment watcher declares the few chain calls it
+needs, and `internal/solana` exports a concrete client and plain types. Test support, the
 recorded devnet transactions and deterministic test keys, lives in `internal/solana/solanatest`, so
 no test code ships in a production package. The client spaces all its calls, one every 1.25 s, below
 the public devnet endpoint's limit of about ten per method per ten seconds. It sorts every failure
@@ -198,6 +198,28 @@ decoding, but it would credit the order with everything the merchant received in
 a transfer for another order or one without the reference included, and nothing would tie the
 money to the transfer that lists the reference.
 
+Each poll asks the RPC node for the newest 100 transactions that list the order's reference, at
+`confirmed` commitment, with `getSignaturesForAddress`. The watcher skips those the ledger already
+holds, and fetches and verifies the rest oldest first, so the transfer that completes the amount is
+the one that pays the order. A transaction that failed on chain is rejected from the listing alone,
+without being fetched.
+
+Every call to the node waits its turn at the client's limiter, one call every 1.25 s: at most 8 in
+10 s, under the 10 per method that the public devnet endpoint reports, with 2 left for a block
+explorer in a browser on the same IP. The documented limits, 40 per method and 100 in all per 10 s,
+are higher, but the observed one is what counts. A poll costs one `getSignaturesForAddress`, plus
+one `getTransaction` for each new signature. A tick polls up to 8 due orders, about one 10 s window
+of calls, and when it polls a full batch the next tick starts at once. A round of N due orders
+therefore takes about the longer of N × 1.25 s and the poll interval, plus 1.25 s for each new
+signature: 10 orders take about 12.5 s, and 35 about 44 s. Underpaid and expired orders past their
+deadline are polled once a minute, so they add little to N; a pending order keeps the poll interval
+until it expires, two minutes or more after its deadline.
+
+Alternative considered: a webhook from an indexing service. It would report a payment within a
+second or two, but it needs an account with the provider, a public URL for the shop, and polling
+anyway to catch up on the calls the shop missed while it was down. Polling needs only the public RPC
+endpoint, which lists the transactions that mention any account, a reference included.
+
 ## Data model
 
 Four tables. `products` holds the catalogue. `orders` holds each order's state: the amount is a
@@ -244,6 +266,34 @@ At READ COMMITTED each statement sees the data as it was when that statement beg
 refund reads the order in a statement after the lock: a locking read that had to wait would return
 the newest version of the order's row, but would still miss a late payment that the transaction
 holding the lock recorded meanwhile.
+
+## Failure modes
+
+The watcher assumes that the RPC node and the database fail from time to time, and that the shop
+itself stops and restarts. None of that may lose a payment or credit one twice.
+
+- The node fails, times out or rate-limits the shop. Each call has a 10 s deadline, the wait at the
+  limiter included. The failure is recorded as `rpc.error` or `rpc.timeout` and ends the tick, and
+  the watcher backs off: with the default 5 s poll interval, 10, 20 and 40 s, then a minute between
+  ticks while the node keeps failing, and at least 15 s after a 429. The first tick that succeeds
+  returns to the poll interval.
+- The node serves another cluster. The watcher checks the genesis hash before its first poll and
+  polls nothing until the check passes. On another cluster the server shuts down and exits 1; a
+  check that fails for any other reason is retried like any other call.
+- The node lists a transaction before it can return it. The transaction is left for the next poll
+  and holds the order's expiry back, as described above, for up to an hour.
+- A transaction cannot be used: it failed on chain, the node can never return it, or it does not pay
+  the order. It is recorded as rejected, with its reason, and changes nothing.
+- A customer pays too little, too much or too late. The order becomes underpaid, paid with the
+  surplus logged as a warning, or stays as it is with the payment recorded as late, for a refund.
+- A wallet sends a plain transfer without the reference. The shop finds payments only by their
+  reference, so it never sees this one.
+- The database fails in one order's poll. The failure is recorded as `watcher.error`, the tick goes
+  on to the next order, and the order is polled again on its next turn.
+- The shop stops in the middle of a tick. The open transaction rolls back, and the next tick finds
+  the same transactions and applies each once. On a signal the server first stops taking requests,
+  then stops the watcher, and then closes the database pool; what the tick applied before the stop
+  stays, and the poll that the stop cuts short records no failure.
 
 ## Out of scope
 
