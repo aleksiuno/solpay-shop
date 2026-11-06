@@ -11,26 +11,27 @@ func TestMigrateURL(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{
 			"postgres://solpay:pw@db:5432/solpay?sslmode=disable",
-			"pgx5://solpay:pw@db:5432/solpay?connect_timeout=10&lock_timeout=30s&sslmode=disable",
+			"pgx5://solpay:pw@db:5432/solpay?connect_timeout=10&lock_timeout=30000ms&sslmode=disable",
 		},
 		{
 			"POSTGRESQL://solpay@localhost/solpay",
-			"pgx5://solpay@localhost/solpay?connect_timeout=10&lock_timeout=30s",
+			"pgx5://solpay@localhost/solpay?connect_timeout=10&lock_timeout=30000ms",
 		},
 		{
+			// The URL's connect_timeout is kept, but its lock_timeout gives way to migrateLockWait.
 			"postgres://solpay@localhost/solpay?connect_timeout=2&lock_timeout=5s",
-			"pgx5://solpay@localhost/solpay?connect_timeout=2&lock_timeout=5s",
+			"pgx5://solpay@localhost/solpay?connect_timeout=2&lock_timeout=30000ms",
 		},
 	}
 	for _, tt := range tests {
-		got, err := migrateURL(tt.in)
+		got, err := migrateURL(tt.in, migrateLockWait)
 		require.NoError(t, err, tt.in)
 		assert.Equal(t, tt.want, got, tt.in)
 	}
 }
 
 func TestMigrateURLRejectsOtherSchemes(t *testing.T) {
-	_, err := migrateURL("mysql://solpay@localhost/solpay")
+	_, err := migrateURL("mysql://solpay@localhost/solpay", migrateLockWait)
 	require.EqualError(t, err, `database URL scheme "mysql": want postgres or postgresql`)
 }
 

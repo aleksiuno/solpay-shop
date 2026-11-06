@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // registers the pgx5:// driver
@@ -15,23 +16,24 @@ import (
 	"github.com/aleksiuno/solpay-shop/migrations"
 )
 
+// migrateLockWait bounds each wait for golang-migrate's advisory lock.
+const migrateLockWait = 30 * time.Second
+
 // Migrate applies every pending migration embedded in the migrations package to the database at
 // databaseURL. golang-migrate holds a Postgres advisory lock while it runs, so servers that start
-// at the same time apply each migration once. Its API takes no context, so the URL bounds the two
-// waits instead: connect_timeout for the connection and lock_timeout for the lock, unless
-// databaseURL already sets them.
+// at the same time apply each migration once. Its API takes no context, so the driver URL bounds
+// the waits instead. connect_timeout bounds the connection, unless databaseURL sets it.
+// lock_timeout, always migrateLockWait, bounds every wait for a lock, a migration's table locks
+// included.
+//
+// golang-migrate takes the advisory lock twice: while it opens the database, to create
+// schema_migrations, and again to apply the migrations. Only lock_timeout bounds the first.
+// golang-migrate's own timeout also bounds the second, and is set 5 s longer, so that Postgres
+// always gives up first.
 func Migrate(databaseURL string) error {
-	driverURL, err := migrateURL(databaseURL)
+	m, err := newMigrator(databaseURL, migrateLockWait)
 	if err != nil {
 		return err
-	}
-	src, err := iofs.New(migrations.FS, ".")
-	if err != nil {
-		return fmt.Errorf("read embedded migrations: %w", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, driverURL)
-	if err != nil {
-		return fmt.Errorf("prepare migrations: %w", err)
 	}
 	// Close errors are ignored: every migration has committed or rolled back by now, and Close
 	// only releases the connection and the embedded source.
@@ -43,9 +45,31 @@ func Migrate(databaseURL string) error {
 	return nil
 }
 
+// newMigrator prepares golang-migrate for the database at databaseURL, with each wait for its
+// advisory lock bounded by lockWait.
+func newMigrator(databaseURL string, lockWait time.Duration) (*migrate.Migrate, error) {
+	driverURL, err := migrateURL(databaseURL, lockWait)
+	if err != nil {
+		return nil, err
+	}
+	src, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded migrations: %w", err)
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, driverURL)
+	if err != nil {
+		return nil, fmt.Errorf("prepare migrations: %w", err)
+	}
+	// Were golang-migrate's timer to fire first, it would leave pg_advisory_lock running, and
+	// Close would block until Postgres cancelled it.
+	m.LockTimeout = lockWait + 5*time.Second
+	return m, nil
+}
+
 // migrateURL turns a postgres:// or postgresql:// URL into the pgx5:// URL that selects
-// golang-migrate's pgx v5 driver, and adds connect_timeout and lock_timeout when they are missing.
-func migrateURL(databaseURL string) (string, error) {
+// golang-migrate's pgx v5 driver. It sets lock_timeout to lockWait, and connect_timeout when it is
+// missing.
+func migrateURL(databaseURL string, lockWait time.Duration) (string, error) {
 	u, err := url.Parse(databaseURL)
 	if err != nil {
 		// A *url.Error repeats the whole URL, password included.
@@ -59,9 +83,11 @@ func migrateURL(databaseURL string) (string, error) {
 	if !q.Has("connect_timeout") {
 		q.Set("connect_timeout", "10")
 	}
-	if !q.Has("lock_timeout") {
-		q.Set("lock_timeout", "30s")
-	}
+	// A lock_timeout in databaseURL is replaced rather than read: golang-migrate's own timeout must
+	// stay longer, and Postgres accepts forms such as 1min that time.ParseDuration does not. The
+	// value is written in milliseconds, since Duration.String writes a minute as 1m0s, which
+	// Postgres rejects.
+	q.Set("lock_timeout", fmt.Sprintf("%dms", lockWait.Milliseconds()))
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
