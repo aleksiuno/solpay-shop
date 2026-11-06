@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 	"uuid"
@@ -78,16 +80,15 @@ var funcs = template.FuncMap{
 	},
 }
 
-// site serves the web routes with its Deps and the parsed pages, by file name.
+// site serves the web routes with its Deps.
 type site struct {
 	Deps
-	pages map[string]*template.Template
 }
 
 // Register adds the public routes to mux. A path that no route on mux serves gets the error page,
 // and a wrong method on one that a route serves a plain-text 405.
 func Register(mux *http.ServeMux, d Deps) {
-	s := site{Deps: d, pages: parsePages()}
+	s := site{Deps: d}
 	mux.HandleFunc("GET /static/style.css", styles())
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /p/{slug}", s.product)
@@ -98,17 +99,26 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.Handle("/", s.unknown(mux, "/"))
 }
 
-// parsePages parses each page in templates with the base layout. The templates are embedded, so
-// one that does not parse fails every test.
+// pages are the parsed pages, by file name. The templates are embedded, so one that does not parse
+// stops the package from initialising, and fails every test.
+var pages = parsePages()
+
+// parsePages parses each template in templates but the base layout as a page, with the base
+// layout. Both the shop and the admin render from the one set.
 func parsePages() map[string]*template.Template {
-	pages := map[string]*template.Template{}
-	for _, name := range []string{
-		"home.html", "product.html", "order.html", "error.html", "admin_products.html", "admin_product_form.html",
-		"admin_orders.html", "admin_order.html", "admin_events.html",
-	} {
-		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
+	files, err := fs.Glob(assets, "templates/*.html")
+	if err != nil {
+		panic(err) // only a malformed pattern fails
 	}
-	return pages
+	parsed := map[string]*template.Template{}
+	for _, file := range files {
+		name := path.Base(file)
+		if name == "base.html" {
+			continue
+		}
+		parsed[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", file))
+	}
+	return parsed
 }
 
 // styles returns the handler of the style sheet, the one static file. An embedded file has no
@@ -143,7 +153,7 @@ type view struct {
 // gives a 500 instead of half a page.
 func (s site) render(w http.ResponseWriter, r *http.Request, status int, page string, v view) {
 	var buf bytes.Buffer
-	if err := s.pages[page].ExecuteTemplate(&buf, "base", v); err != nil {
+	if err := pages[page].ExecuteTemplate(&buf, "base", v); err != nil {
 		s.Log.LogAttrs(r.Context(), slog.LevelError, "page render failed", slog.String("page", page), slog.Any("error", err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
