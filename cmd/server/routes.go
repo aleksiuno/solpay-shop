@@ -36,7 +36,22 @@ func routes(cfg config.Config, log *slog.Logger, site web.Deps, api httpapi.Deps
 
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(httpapi.Forbidden))
-	return httpapi.RequestID(httpapi.AccessLog(log)(httpapi.Recover(log)(cop.Handler(root))))
+	return httpapi.RequestID(securityHeaders(httpapi.AccessLog(log)(httpapi.Recover(log)(cop.Handler(root)))))
+}
+
+// securityHeaders sets the headers that every answer carries, whichever handler writes it.
+// nosniff makes browsers keep to the Content-Type an answer gives, so that none is ever run as a
+// script or shown as a page it is not. same-origin sends the Referer to the shop alone: many of
+// its URLs hold an order id, which must not reach the explorer that the admin pages link to, or
+// any other site. It sits outside Recover, which keeps the headers set before it, so a 500 from a
+// panic carries them too.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // adminHeaders sets the headers of every admin answer, a refusal of the credentials included.

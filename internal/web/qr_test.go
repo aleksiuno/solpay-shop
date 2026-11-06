@@ -34,7 +34,6 @@ func TestOrderQR(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, o.Status)
 		sent := w.Result().Header
 		assert.Equal(t, "image/png", sent.Get("Content-Type"))
-		assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"))
 		assert.Equal(t, "no-store", sent.Get("Cache-Control"))
 
 		code, err := qrcode.New(payment.Request(o, merchant).URL(), qrcode.Medium)

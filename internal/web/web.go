@@ -130,9 +130,7 @@ func (s site) render(w http.ResponseWriter, r *http.Request, status int, page st
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	// An error here means the client has gone; there is no one left to tell.
 	_, _ = buf.WriteTo(w)

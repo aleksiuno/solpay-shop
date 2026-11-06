@@ -177,7 +177,6 @@ func TestRecoverAnswersAPanicWithTheInternalEnvelope(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.JSONEq(t, `{"error": {"code": "internal", "message": "internal error"}}`, w.Body.String())
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
-	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 	assert.Empty(t, w.Header().Values("Content-Disposition"), "the handler's headers are dropped")
 	assert.Empty(t, w.Header().Values("Content-Length"))
 	id := w.Header().Get("X-Request-ID")

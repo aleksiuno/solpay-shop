@@ -19,6 +19,9 @@ leave out `http://`.
 - Every response carries an `X-Request-ID` header, a random id that the server also logs as
   `request_id` on each line about the request. Quote it when you report a problem. An
   `X-Request-ID` sent with the request is ignored.
+- Every response also carries `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: same-origin`, so a browser takes each answer as the type it is sent as, and
+  tells no other site the URL it came from, which may hold an order id.
 - Everything under `/api/v1/admin/` and `/admin/` needs HTTP basic auth with `ADMIN_USER` and
   `ADMIN_PASS` from `.env`. Without them, or with others, the answer is `401 unauthorized`. Admin
   answers, the `401` included, carry `X-Frame-Options: DENY` and `Cache-Control: no-store`, since

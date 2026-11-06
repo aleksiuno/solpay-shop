@@ -53,12 +53,11 @@ func oneOf[S ~string](vs []S) string {
 
 // writeJSON writes v as JSON with status.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	h := w.Header()
-	h.Set("Content-Type", "application/json")
-	h.Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	// "&" stays as it is, not "\u0026", so that a URL in the answer can be copied from it. The
-	// headers keep a browser from reading the answer as HTML.
+	// Content-Type, and the nosniff that the server sets on every answer, keep a browser from
+	// reading the answer as HTML.
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	// An error here means the client has gone; there is no one left to tell.
