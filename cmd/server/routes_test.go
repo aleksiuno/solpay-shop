@@ -99,6 +99,7 @@ var adminPaths = []string{
 	"/api/v1/admin/orders",
 	"/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e",
 	"/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund",
+	"/api/v1/admin/events",
 }
 
 func TestAdminRoutesNeedCredentials(t *testing.T) {
@@ -152,6 +153,7 @@ func TestAdminRoutesAreMounted(t *testing.T) {
 		{http.MethodPost, "/api/v1/admin/orders", "GET, HEAD"},
 		{http.MethodPost, "/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "GET, HEAD"},
 		{http.MethodGet, "/api/v1/admin/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/refund", "POST"},
+		{http.MethodPost, "/api/v1/admin/events", "GET, HEAD"},
 	}
 	for _, tt := range tests {
 		w := request(h, tt.method, tt.path, withAuth(adminUser, adminPass))
