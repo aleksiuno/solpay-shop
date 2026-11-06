@@ -42,9 +42,21 @@ var errShutdownTimedOut = errors.New("server: shutdown timed out")
 
 func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply pending database migrations and exit")
+	// Every setting comes from the environment and there is only one flag, so the help says first
+	// where the settings come from.
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), `Usage: server [-migrate-only]
+
+server runs the shop: its web pages, its JSON API and the payment watcher.
+It reads every setting from environment variables, which .env.example in
+the repository lists and explains.
+
+`)
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "unexpected arguments: %v\n", flag.Args())
+		fmt.Fprintf(os.Stderr, "server: unexpected arguments: %v\n", flag.Args())
 		flag.Usage()
 		os.Exit(2)
 	}
