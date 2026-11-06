@@ -81,7 +81,6 @@ func TestDownloadSendsTheFileAsAnAttachment(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "the checklist", w.Body.String())
 	assert.Equal(t, "attachment; filename=go-payments-checklist.md", w.Header().Get("Content-Disposition"))
-	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 	assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"))
 	assert.Equal(t, "Thu, 01 Oct 2026 09:30:00 GMT", w.Header().Get("Last-Modified"))
 	assert.Equal(t, []call{{orderID, "1793534400", "c2lnbmF0dXJl", true}}, d.calls, "a GET fulfils")

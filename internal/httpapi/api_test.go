@@ -124,7 +124,6 @@ func TestForbidden(t *testing.T) {
 	httpapi.Forbidden(w, httptest.NewRequest(http.MethodPost, "/", nil))
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
-	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 	code, msg := envelope(t, w.Body)
 	assert.Equal(t, "forbidden", code)
 	assert.NotEmpty(t, msg)

@@ -98,7 +98,6 @@ func requirePage(t *testing.T, w *httptest.ResponseRecorder, status int) string 
 	require.Equal(t, status, w.Code, w.Body.String())
 	sent := w.Result().Header // as written with the status, not as set later
 	assert.Equal(t, "text/html; charset=utf-8", sent.Get("Content-Type"))
-	assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"))
 	return w.Body.String()
 }
 

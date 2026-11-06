@@ -289,7 +289,8 @@ func TestCrossOriginUnsafeRequestsAreRefused(t *testing.T) {
 
 // A panic and a refused cross-site request show the order of the middleware: Recover and
 // cross-origin protection inside the access log, which sees the 500 and the 403, and the request
-// id outside them all, so every line carries it.
+// id outside them all, so every line carries it. The security headers are set outside Recover as
+// well, so the 500 keeps them.
 func TestMiddlewareOrder(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(httpapi.ContextHandler{Handler: slog.NewJSONHandler(&buf, nil)})
@@ -299,6 +300,9 @@ func TestMiddlewareOrder(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Equal(t, "internal", errorCode(t, w))
+	sent := w.Result().Header // as written with the status, not as set later
+	assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"))
+	assert.Equal(t, "same-origin", sent.Get("Referrer-Policy"))
 	assert.Equal(t, http.StatusForbidden, refused.Code)
 	id := w.Header().Get("X-Request-ID")
 	var lines []map[string]any
@@ -318,15 +322,25 @@ func TestMiddlewareOrder(t *testing.T) {
 	assert.Equal(t, refused.Header().Get("X-Request-ID"), lines[2]["request_id"])
 }
 
-func TestEveryResponseHasARequestID(t *testing.T) {
+// Every response carries a request id and the security headers, whoever writes it: a handler, the
+// mux, basic auth or cross-origin protection.
+func TestEveryResponseHasTheCommonHeaders(t *testing.T) {
 	h := newRouter()
-	for _, w := range []*httptest.ResponseRecorder{
-		request(h, http.MethodGet, "/healthz"),
-		request(h, http.MethodGet, "/no-such-page"),
-		request(h, http.MethodGet, "/admin/"),
-		request(h, http.MethodPost, "/healthz", crossSite),
-	} {
-		assert.Len(t, w.Header().Get("X-Request-ID"), 36)
+	tests := []struct {
+		method, path string
+		prepare      []func(*http.Request)
+	}{
+		{http.MethodGet, "/healthz", nil},
+		{http.MethodGet, "/static/style.css", nil},
+		{http.MethodGet, "/no-such-page", nil},
+		{http.MethodGet, "/admin/", nil},
+		{http.MethodPost, "/healthz", []func(*http.Request){crossSite}},
+	}
+	for _, tt := range tests {
+		sent := request(h, tt.method, tt.path, tt.prepare...).Result().Header
+		assert.Len(t, sent.Get("X-Request-ID"), 36, tt.method+" "+tt.path)
+		assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"), tt.method+" "+tt.path)
+		assert.Equal(t, "same-origin", sent.Get("Referrer-Policy"), tt.method+" "+tt.path)
 	}
 }
 

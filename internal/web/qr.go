@@ -43,9 +43,7 @@ func (s site) orderQR(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	h := w.Header()
-	h.Set("X-Content-Type-Options", "nosniff")
 	// The code asks for what remains, which a payment changes, and its URL names the order.
-	h.Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, "qr.png", time.Time{}, bytes.NewReader(png))
 }
