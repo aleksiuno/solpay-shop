@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,8 +43,9 @@ func TestAdminEventsLog(t *testing.T) {
 	body := requirePage(t, get(adminEvents(e), "/admin/events"), http.StatusOK)
 
 	assert.Equal(t, audit.ListFilter{}, e.filter, "every event")
-	// The order's id is shortened to its first 8 characters, the whole id in the title and link.
-	orderCell := `<td><a href="/admin/orders/` + id.String() + `" title="` + id.String() + `"><code>3c9e6f1a</code></a></td>`
+	// The order's id is shortened to its first 8 characters, the whole id in the title and links.
+	orderCell := `<td><a href="/admin/events?order_id=` + id.String() + `" title="` + id.String() + `"><code>3c9e6f1a</code></a>` +
+		` (<a href="/admin/orders/` + id.String() + `">order</a>)</td>`
 	for _, want := range []string{
 		"<title>Events · solpay-shop</title>",
 		`<body class="wide">`, // the full width, for the table
@@ -54,6 +56,14 @@ func TestAdminEventsLog(t *testing.T) {
 			`<code>` + html.EscapeString(`{"lamports":4000000}`) + `</code></td></tr>`,
 		`<tr class="lvl-info"><td>2026-11-05 11:55:00 UTC</td><td>info</td><td><code>order.created</code></td>` + orderCell +
 			`<td>order created</td><td></td></tr>`,
+		`<form class="filter" method="get" action="/admin/events">`,
+		`<input id="order_id" name="order_id" value="" size="36" spellcheck="false">`,
+		`<select id="level" name="level">
+<option value="">All</option>
+<option>info</option>
+<option>warn</option>
+<option>error</option>
+</select>`,
 		`<p class="notice">Newest first, at most 100 events a page.</p>`,
 		`<p><a href="/admin/orders">All orders</a></p>`,
 	} {
@@ -93,19 +103,51 @@ func TestAdminEventsPages(t *testing.T) {
 	assert.Contains(t, body, "No events.")
 }
 
-// A page that names no event shows the problem, and no events.
-func TestAdminEventsRefusesABadPage(t *testing.T) {
-	tests := []struct{ query, problem string }{
-		{"before=0", "There is no such page."},
-		{"before=-5", "There is no such page."},
-		{"before=next", "There is no such page."},
-		{"before=9223372036854775808", "There is no such page."},
-		{"before=1.5", "There is no such page."},
+// The filter is the order and the level asked for, and the page links keep it.
+func TestAdminEventsByOrderAndLevel(t *testing.T) {
+	id := pending.ID
+	for _, l := range levels {
+		e := &eventLog{events: fullPage(250)}
+		// An id in capitals, or pasted with spaces around it, is the same id.
+		body := requirePage(t, get(adminEvents(e), "/admin/events?order_id=+"+strings.ToUpper(id.String())+"+&level="+string(l)+"&before=300"), http.StatusOK)
+		assert.Equal(t, audit.ListFilter{OrderID: &id, Level: l, Before: 300}, e.filter)
+		assert.Contains(t, body, `<input id="order_id" name="order_id" value="`+id.String()+`"`)
+		for _, other := range levels {
+			assert.Equal(t, other == l, strings.Contains(body, "<option selected>"+string(other)+"</option>"), "%s selected for %s", other, l)
+		}
+		assert.Contains(t, body, `<a href="/admin/events?level=`+string(l)+`&amp;order_id=`+id.String()+`">← Newest</a>`)
+		assert.Contains(t, body, `<a href="/admin/events?before=151&amp;level=`+string(l)+`&amp;order_id=`+id.String()+`">Older →</a>`)
+	}
+
+	// A filtered first page has no link to the newest: it is the newest.
+	e := &eventLog{events: fullPage(250)}
+	body := requirePage(t, get(adminEvents(e), "/admin/events?order_id="+id.String()+"&level=warn"), http.StatusOK)
+	assert.Equal(t, audit.ListFilter{OrderID: &id, Level: audit.Warn}, e.filter)
+	assert.NotContains(t, body, "← Newest")
+	assert.Contains(t, body, `<p><a href="/admin/events?before=151&amp;level=warn&amp;order_id=`+id.String()+`">Older →</a></p>`)
+}
+
+// levels are the event levels.
+var levels = []audit.Level{audit.Info, audit.Warn, audit.Error}
+
+// A filter that names nothing shows the page with the problem and the filter as sent, and no
+// events.
+func TestAdminEventsRefusesABadFilter(t *testing.T) {
+	tests := []struct{ query, problem, orderID string }{
+		{"order_id=not-a-uuid", "The order id is not a UUID.", "not-a-uuid"},
+		{"level=debug", "There is no such level.", ""},
+		{"level=WARN", "There is no such level.", ""},
+		{"before=0", "There is no such page.", ""},
+		{"before=-5", "There is no such page.", ""},
+		{"before=next", "There is no such page.", ""},
+		{"before=9223372036854775808", "There is no such page.", ""},
+		{"order_id=" + pending.ID.String() + "&before=1.5", "There is no such page.", pending.ID.String()},
 	}
 	for _, tt := range tests {
 		// A store that fails gives a 500, so a 400 is refused before the store is asked.
 		body := requirePage(t, get(adminEvents(&eventLog{err: errBoom}), "/admin/events?"+tt.query), http.StatusBadRequest)
 		assert.Contains(t, body, `<p class="problem" role="alert">`+tt.problem+`</p>`, tt.query)
+		assert.Contains(t, body, `<input id="order_id" name="order_id" value="`+tt.orderID+`"`, tt.query)
 		assert.NotContains(t, body, "<table", tt.query)
 		assert.Contains(t, body, `<p><a href="/admin/orders">All orders</a></p>`, tt.query)
 		assert.Contains(t, body, `<body class="wide">`, tt.query)
@@ -116,10 +158,12 @@ func TestAdminEventsWhenTheStoreFails(t *testing.T) {
 	requirePage(t, get(adminEvents(&eventLog{err: errBoom}), "/admin/events"), http.StatusInternalServerError)
 }
 
-// The order list links to the log.
-func TestAdminOrderListLinksToTheLog(t *testing.T) {
+// The order list links to the log, and an order's page to its events there.
+func TestAdminOrderPagesLinkToTheLog(t *testing.T) {
 	mux := adminOrders(&orderAdmin{orders: []order.Order{pending}}, ledger{}, &eventLog{})
 	body := requirePage(t, get(mux, "/admin/orders"), http.StatusOK)
 	assert.Contains(t, body, `<a href="/admin/events">The event log</a>`)
 	assert.Contains(t, body, "<body>", "only the event log takes the full width")
+	assert.Contains(t, requirePage(t, get(mux, "/admin/orders/"+pending.ID.String()), http.StatusOK),
+		`<a href="/admin/events?order_id=`+pending.ID.String()+`">The order in the event log</a>`)
 }
