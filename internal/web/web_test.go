@@ -124,10 +124,10 @@ func TestHomeListsTheProductsForSale(t *testing.T) {
 	assert.Contains(t, body, `<link rel="stylesheet" href="/static/style.css">`)
 }
 
-// The home page is the root only: another path is not found.
+// The home page is the root only: another path gets the error page.
 func TestHomeIsTheRootOnly(t *testing.T) {
 	mux, _ := newSite(web.Deps{Products: &catalogue{}})
-	assert.Equal(t, http.StatusNotFound, get(mux, "/no-such-page").Code)
+	assert.Contains(t, requirePage(t, get(mux, "/no-such-page"), http.StatusNotFound), "There is no such page.")
 }
 
 func TestHomeWithNothingForSale(t *testing.T) {
@@ -206,4 +206,61 @@ func TestStaticStylesAreRevalidatedByTheirTag(t *testing.T) {
 	w = ask(`"an-older-sheet"`)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "font")
+}
+
+// A path that no route serves, with any method, gets the error page in the site's layout, as an
+// unknown product does.
+func TestUnknownPagesGetTheErrorPage(t *testing.T) {
+	mux, _ := newSite(web.Deps{Products: &catalogue{}})
+	for _, path := range []string{"/no-such-page", "/p/", "/p/go-payments-checklist/more", "/orders/", "/d/"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			body := requirePage(t, serve(mux, httptest.NewRequest(method, path, nil)), http.StatusNotFound)
+			assert.Contains(t, body, "There is no such page.", method+" "+path)
+			assert.Contains(t, body, `<a href="/">All products</a>`, method+" "+path)
+		}
+	}
+}
+
+// A wrong method on a path that a route serves gets the 405 that ServeMux sends, in plain text
+// with the methods the path has, and reaches no handler: a download keeps its plain-text answers.
+func TestAWrongMethodIsNotAllowed(t *testing.T) {
+	d := &downloads{}
+	mux, _ := newSite(web.Deps{Products: &catalogue{err: errBoom}, Downloads: d})
+	tests := []struct{ method, path, allow string }{
+		{http.MethodPost, "/", "GET, HEAD"},
+		{http.MethodPost, "/p/go-payments-checklist", "GET, HEAD"},
+		{http.MethodGet, "/checkout", "POST"},
+		{http.MethodDelete, "/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", "GET, HEAD"},
+		{http.MethodPut, "/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/qr.png", "GET, HEAD"},
+		{http.MethodPost, link, "GET, HEAD"},
+		{http.MethodPost, "/static/style.css", "GET, HEAD"},
+	}
+	for _, tt := range tests {
+		w := serve(mux, httptest.NewRequest(tt.method, tt.path, nil))
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, tt.path)
+		assert.Equal(t, tt.allow, w.Header().Get("Allow"), tt.path)
+		assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), tt.path)
+		assert.Equal(t, "Method Not Allowed\n", w.Body.String(), tt.path)
+	}
+	assert.Empty(t, d.calls, "no download was opened")
+}
+
+// In the 405, Allow lists the path's methods as ServeMux lists them, whichever they are. No page
+// takes DELETE, PATCH or PUT yet, so the test adds routes that do, to the site's mux and to a bare
+// one with the same patterns.
+func TestAWrongMethodListsTheMethodsAsServeMuxDoes(t *testing.T) {
+	mux, _ := newSite(web.Deps{Products: &catalogue{}})
+	bare := http.NewServeMux()
+	bare.HandleFunc("GET /p/{slug}", http.NotFound)
+	for _, pattern := range []string{"DELETE /p/{slug}", "PATCH /p/{slug}", "PUT /p/{slug}"} {
+		mux.HandleFunc(pattern, http.NotFound)
+		bare.HandleFunc(pattern, http.NotFound)
+	}
+	want := serve(bare, httptest.NewRequest(http.MethodPost, "/p/go-payments-checklist", nil))
+	require.Equal(t, http.StatusMethodNotAllowed, want.Code)
+	require.Equal(t, "DELETE, GET, HEAD, PATCH, PUT", want.Header().Get("Allow"))
+
+	w := serve(mux, httptest.NewRequest(http.MethodPost, "/p/go-payments-checklist", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	assert.Equal(t, want.Header().Get("Allow"), w.Header().Get("Allow"))
 }

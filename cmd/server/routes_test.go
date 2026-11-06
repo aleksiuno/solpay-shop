@@ -323,6 +323,33 @@ func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
 	assert.Equal(t, "method_not_allowed", errorCode(t, w))
 }
 
+// A path that no route serves gets the shop's error page. A wrong method on a path that a route
+// serves gets a plain-text 405 with Allow, as ServeMux sends it, so /healthz and the downloads keep
+// their plain-text answers.
+func TestUnknownPagesUseTheErrorPage(t *testing.T) {
+	h := newRouter()
+	tests := []struct {
+		method, path       string
+		code               int
+		allow, contentType string
+		body               string
+	}{
+		{http.MethodGet, "/no-such-page", http.StatusNotFound, "", "text/html; charset=utf-8", "There is no such page."},
+		{http.MethodPost, "/p/x", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
+		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
+		{http.MethodPost, "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			w := request(h, tt.method, tt.path)
+			assert.Equal(t, tt.code, w.Code)
+			assert.Equal(t, tt.allow, w.Header().Get("Allow"))
+			assert.Equal(t, tt.contentType, w.Header().Get("Content-Type"))
+			assert.Contains(t, w.Body.String(), tt.body)
+		})
+	}
+}
+
 func TestCrossOriginUnsafeRequestsAreRefused(t *testing.T) {
 	h := newRouter()
 	for _, path := range []string{

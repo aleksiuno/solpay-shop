@@ -84,7 +84,8 @@ type site struct {
 	pages map[string]*template.Template
 }
 
-// Register adds the public routes to mux.
+// Register adds the public routes to mux. A path that no route on mux serves gets the error page,
+// and a wrong method on one that a route serves a plain-text 405.
 func Register(mux *http.ServeMux, d Deps) {
 	s := site{Deps: d, pages: parsePages()}
 	mux.HandleFunc("GET /static/style.css", styles())
@@ -94,6 +95,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /orders/{id}", s.order)
 	mux.HandleFunc("GET /orders/{id}/qr.png", s.orderQR)
 	mux.HandleFunc("GET /d/{id}", s.download)
+	mux.Handle("/", s.unknown(mux, "/"))
 }
 
 // parsePages parses each page in templates with the base layout. The templates are embedded, so
