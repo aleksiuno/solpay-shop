@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/aleksiuno/solpay-shop/internal/config"
+	"github.com/aleksiuno/solpay-shop/internal/solana"
 )
 
 // testAddress returns a valid base58 address derived from label, so no real key is needed.
@@ -60,7 +61,7 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, config.Config{
 		Addr:            ":8080",
 		DatabaseURL:     env["DATABASE_URL"],
-		SolanaRPCURL:    "https://api.devnet.solana.com",
+		SolanaRPCURL:    solana.DevnetRPCURL, // config imports nothing internal, so it keeps a copy
 		MerchantAddress: env["MERCHANT_ADDRESS"],
 		OrderTTL:        15 * time.Minute,
 		PollInterval:    5 * time.Second,
