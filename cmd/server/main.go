@@ -35,6 +35,11 @@ var version = "dev"
 // times out is still logged before the container is killed.
 const shutdownTimeout = 7 * time.Second
 
+// errShutdownTimedOut is the cause of the requests that a timed-out shutdown cuts off. net/http
+// ends a request whose client hung up with a plain context.Canceled, so the cause the handlers log
+// tells the two apart.
+var errShutdownTimedOut = errors.New("server: shutdown timed out")
+
 func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply pending database migrations and exit")
 	flag.Parse()
@@ -148,10 +153,11 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 		return nil
 	}
 
-	// The requests' contexts, which a shutdown that times out cancels. pool.Close waits for every
-	// connection to come back, so it would otherwise wait for any request still running.
-	reqCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelRequests()
+	// The requests' contexts, which a shutdown that times out cancels with errShutdownTimedOut.
+	// pool.Close waits for every connection to come back, so it would otherwise wait for any
+	// request still running.
+	reqCtx, cancelRequests := context.WithCancelCause(context.WithoutCancel(ctx))
+	defer cancelRequests(nil)
 
 	site := web.Deps{
 		Products: products, Orders: orders, Downloads: downloads, Merchant: cfg.MerchantAddress, Now: now,
@@ -178,12 +184,13 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	logger.LogAttrs(ctx, slog.LevelInfo, "server started", slog.String("addr", ln.Addr().String()))
 
 	// The watcher returns early only when it cannot work, such as on a node that is not devnet.
-	// The server then shuts down as on a signal, and exits with the watcher's error.
+	// The server then shuts down as on a signal, and exits with the watcher's error, which main
+	// logs; the line here only says why the shutdown began.
 	select {
 	case err := <-serveErr:
 		return errors.Join(fmt.Errorf("serve: %w", err), stopWatcher())
 	case <-watchDone:
-		logger.LogAttrs(ctx, slog.LevelInfo, "shutting down", slog.Any("cause", stopWatcher()))
+		logger.LogAttrs(ctx, slog.LevelInfo, "shutting down", slog.String("cause", "payment watcher stopped"))
 	case <-ctx.Done():
 		logger.LogAttrs(ctx, slog.LevelInfo, "shutting down", slog.Any("cause", context.Cause(ctx)))
 	}
@@ -192,7 +199,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Ends the requests still running and their queries, then their connections.
-		cancelRequests()
+		cancelRequests(errShutdownTimedOut)
 		return errors.Join(fmt.Errorf("shutdown: %w", err), srv.Close(), stopWatcher())
 	}
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {

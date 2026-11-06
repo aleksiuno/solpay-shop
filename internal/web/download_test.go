@@ -190,8 +190,8 @@ func TestDownloadRefusesAPathThatIsNotAnOrderID(t *testing.T) {
 
 func TestDownloadWhenTheRequestIsCanceled(t *testing.T) {
 	mux, buf := newSite(web.Deps{Downloads: &downloads{err: context.Canceled}})
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errors.New("server: shutdown timed out"))
 	w := serve(mux, httptest.NewRequestWithContext(ctx, http.MethodGet, link, nil))
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -199,6 +199,7 @@ func TestDownloadWhenTheRequestIsCanceled(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &line), buf.String())
 	assert.Equal(t, "WARN", line["level"])
 	assert.Equal(t, "request canceled", line["msg"])
+	assert.Equal(t, "server: shutdown timed out", line["cause"], "the context's cause, not only that it ended")
 }
 
 // store holds one order, which MarkFulfilled moves from paid to fulfilled, and its product.

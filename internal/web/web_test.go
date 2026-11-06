@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -155,12 +156,13 @@ func TestHomeWhenTheStoreFails(t *testing.T) {
 
 func TestHomeWhenTheRequestIsCanceled(t *testing.T) {
 	mux, buf := newSite(web.Deps{Products: &catalogue{err: context.Canceled}})
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errors.New("server: shutdown timed out"))
 	requirePage(t, serve(mux, httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)), http.StatusInternalServerError)
 	line := logLine(t, buf)
 	assert.Equal(t, "WARN", line["level"])
 	assert.Equal(t, "request canceled", line["msg"])
+	assert.Equal(t, "server: shutdown timed out", line["cause"], "the context's cause, not only that it ended")
 }
 
 func TestStaticStyles(t *testing.T) {
