@@ -2,16 +2,10 @@
 
 ## What it is
 
-solpay-shop sells digital downloads for SOL. A customer picks a product and gets a payment request:
-the merchant address, an exact amount and a deadline. They pay from a devnet wallet. A watcher inside
-the service finds the transaction on chain, verifies it and marks the order paid, and the customer
-then gets a short-lived, signed download link. Everything runs on Solana devnet, so no real money is
-involved.
-
-It is a portfolio project and deliberately small. The aim is to show the parts of a payment system
-that are easy to get wrong: an explicit order state machine, idempotent payment handling (a
-transaction is credited once, however often it is seen), sensible behaviour when the RPC node is
-slow or down, and tests at every layer.
+solpay-shop sells digital downloads for SOL on Solana devnet, so no real money is involved. This
+small portfolio project shows the parts of a payment system that are easy to get wrong: an explicit
+state machine, idempotent payment handling, sensible behaviour when the RPC node fails, and tests
+at every layer.
 
 ## Architecture
 
@@ -36,83 +30,29 @@ slow or down, and tests at every layer.
   +--------------+
 ```
 
-Arrows show calls. Handlers call services; services never import `net/http`, pgx or the Solana
-SDK, so their tests need no HTTP server, database or network. `internal/db` imports the service
-packages to implement their storage interfaces, never the other way round, and `cmd/server` wires
-the pieces together. Within the server, only `internal/solana` imports the Solana SDK: the rest of
-the code works with plain Go types, and tests can swap in a fake client.
+Arrows show calls; the admin views also read the ledger and the event log straight from the store.
+Services import no `net/http`, pgx or Solana SDK, so their tests need no server, database or
+network. Interfaces sit with the code that uses them, such as the watcher's three chain calls;
+`internal/db` imports the services to implement the storage ones, never the reverse. In the server
+only `internal/solana` imports the Solana SDK. Its fake node, recorded transactions and test keys
+live in `internal/solana/solanatest`, outside production code.
 
-Interfaces belong to the code that uses them: the payment watcher declares the few chain calls it
-needs, and `internal/solana` exports a concrete client and plain types. Test support, the
-recorded devnet transactions and deterministic test keys, lives in `internal/solana/solanatest`, so
-no test code ships in a production package. The client spaces all its calls, one every 1.25 s, below
-the public devnet endpoint's limit of about ten per method per ten seconds. It sorts every failure
-into one of five classes: the caller's context ended, rate limited, not indexed yet, permanent (a
-retry cannot help) or transient; the genesis check adds a sixth, a cluster that is not devnet. A
-keyed endpoint's URL never appears in its errors.
-
-The payment watcher is a goroutine in the same process. Each order has its own reference, a random
-32-byte address that the customer's payment lists as an extra account. On each tick the watcher
-asks the RPC node for the transactions that mention the reference of each due order that is
-pending, underpaid or recently expired, verifies them, and records each result and its events in one database
-transaction. The reference is 32 random bytes, not a generated keypair: an account that never
-signs needs no private key, so the shop holds no keys at all.
-
-Each order holds the time its next poll is due. A tick takes the orders that have been due
-longest, a batch at a time, and gives each order it polls a new time, even when the poll fails, so
-every watched order gets its turn however many there are. An order that needs no more polls has
-its time cleared, which takes it out of a partial index of the orders still watched, so finding the
-due orders reads a few index pages however many orders the shop keeps. Underpaid and expired
-orders are watched until an hour past their deadline. Each tick also clears the time of any such
-order whose hour ended before its last poll came round, as can happen after downtime, so no order
-stays in the index for good. The query that finds the due orders reads the orders table alone.
-Reading one order also checks the ledger for a late payment; in a test with 200,000 orders,
-putting that check in the due-orders query let a generic plan, which Postgres may cache for a
-prepared statement, scan all 150,000 ledger rows.
-
-The event log has a package of its own, `internal/audit`, which imports no other package of the
-shop. The order, payment and download code all emit events. Most arise in payment, but the event
-types cannot live there: order would have to import payment, which already imports order. In order,
-they would put the watcher's RPC errors in a package that has nothing to do with RPC. Code that
-changes an order in a database transaction saves its events in the same transaction and logs them
-only after the commit, so the log never shows a change that rolled back. Events outside any
-transaction, such as an RPC error, are saved and logged at once, and logged even if saving fails.
-An outbox table that a separate process publishes from would also keep the log and the database in
-step, but nothing here consumes events, so saving them in the order's own transaction is enough.
-
-Payment requests are Solana Pay URLs (`solana:<merchant>?amount=…&reference=…`), which a pure
-package, `internal/solanapay`, builds and parses. The URL carries the amount in decimal SOL, and
-`internal/money` converts between lamports and SOL with integer arithmetic only, because a float64
-rounds lamports.
-
-Neither a plain wallet Send nor `solana transfer` can attach a reference, so the repository
-includes devpay, a small command that pays a Solana Pay URL on devnet the way a Solana Pay wallet
-does: the references go on the transfer as read-only accounts. It checks the RPC node's genesis
-hash before it sends anything, so it cannot pay on mainnet by mistake.
-
-Configuration comes only from the environment. Secrets and the merchant address live only in
-`.env`, which is never committed: `make env` generates the secrets, and compose refuses to start
-without them.
-
-Logs are JSON lines on stdout, plus an optional file (`LOG_FILE`) for runs on the host. Under
-compose the app logs to stdout only, because Docker already keeps it. Every request gets a random
-id, returned in the `X-Request-ID` header and added to each line the server logs with the
-request's context, so its access log line, events and errors can be matched. The access log leaves
-out query strings, because a download link carries its signature in one.
-
-The admin pages and the admin API, under `/admin/` and `/api/v1/admin/`, share one basic auth check
-that compares the credentials in constant time. A browser resends basic credentials on its own, so
-another site could submit a form to an admin route. Go's `http.CrossOriginProtection` refuses every
-cross-site request with an unsafe method before it reaches a route, using the `Sec-Fetch-Site` and
-`Origin` headers that browsers send, so no CSRF tokens are needed. curl and other clients that send
-neither header pass. For the same reason, the admin pages and the admin API answer with
-`X-Frame-Options: DENY`, so another site cannot show an admin page in a frame and trick a click on
-it.
-
-The server applies pending migrations when it starts, so `go run ./cmd/server` needs no separate
-step. golang-migrate holds a Postgres advisory lock while it runs, so servers that start together
-apply each migration once. Compose runs the same image once with `-migrate-only` first, so the
-demo seed always finds the schema; the app's own check then finds nothing to apply.
+- An order's reference is 32 random bytes in base58, not a keypair: an account that never signs
+  needs no private key, so the shop holds none.
+- Event types live in a leaf package, `audit`, so `order` and `payment` can both create them.
+  Events saved in a transaction are logged only after the commit.
+- `money` converts lamports and SOL with integers only; `solanapay`, a pure package, builds and
+  parses Solana Pay URLs.
+- A download link carries an HMAC of the order id and an expiry 15 minutes on, checked before any
+  database read. The id alone reads the order, so the signature adds no secret; it makes a copied
+  URL expire. A GET fulfils a paid order once the file has opened. Files are read through an
+  `os.Root`, and the handler sits in `web`, so `download` needs no `net/http`.
+- Logs are JSON on stdout, plus `LOG_FILE` if set; compose logs to stdout only, as Docker keeps it.
+- Configuration comes only from the environment. Secrets and the merchant address live only in
+  `.env`: `make env` generates the secrets, and compose refuses to start without them.
+- The admin pages and the admin API share one basic auth check. A browser resends those
+  credentials on its own, so Go's `http.CrossOriginProtection` refuses a cross-site request with an
+  unsafe method, which needs no CSRF tokens, and admin answers carry `X-Frame-Options: DENY`.
 
 ## Order state machine
 
@@ -133,228 +73,127 @@ demo seed always finds the schema; the app's own check then finds nothing to app
 
 | From | To | When | By |
 |---|---|---|---|
-| pending | paid | an on-time payment brings the total to the amount or more | watcher |
-| pending | underpaid | an on-time payment leaves the total short of the amount | watcher |
-| pending | expired | nothing was paid by the deadline | watcher |
-| underpaid | paid | an on-time top-up brings the total to the amount or more | watcher |
-| paid | fulfilled | the first authorised download | customer |
+| pending | paid | an on-time payment brings the total to the amount | watcher |
+| pending | underpaid | an on-time payment leaves the total short | watcher |
+| pending | expired | no payment by the deadline | watcher |
+| underpaid | paid | an on-time top-up brings the total to the amount | watcher |
+| paid | fulfilled | the first download | customer |
 | underpaid, paid, fulfilled | refunded | an admin marks the order refunded | admin |
-| expired | refunded | the same, but only if a payment arrived after the deadline | admin |
+| expired | refunded | the same, only if a payment arrived late | admin |
 
-A payment is on time if its block time is not after the deadline, and only on-time payments count
-towards the amount. When the RPC node gives no block time, the time the payment was first seen
-stands in for it. An overpayment counts as paid in full and is logged as a warning. A top-up that
-is still short leaves the order underpaid, and a payment after the deadline is recorded as late
-without changing the status. A refund is marked by an admin; the SOL itself is returned outside the
-shop.
+A payment counts only if it is on time: its block time, or without one the time of the poll that
+records it, is not after the deadline. An overpayment pays the order with a warning; a late payment
+is recorded and changes nothing. Three moves handle money off the simple path:
 
-Three of the moves handle money that does not fit the simple path:
+- underpaid → paid: the customer can send the rest before the deadline. An underpaid order never
+  expires, because it holds the customer's SOL.
+- fulfilled → refunded: a download does not settle an order for good.
+- expired → refunded: the customer is owed a late payment. Without one, the order received nothing
+  and cannot be refunded.
 
-- underpaid → paid: a customer who sent too little can send the rest, with the same reference,
-  before the deadline.
-- fulfilled → refunded: a download does not settle the order for good, so an admin can still
-  refund it.
-- expired → refunded: a payment that arrives after the deadline is recorded but not credited, so
-  the order stays expired and the customer is owed that SOL. The refund closes the order. An
-  expired order without a late payment received nothing, so it cannot be refunded.
-
-An underpaid order never expires, because it holds the customer's SOL: it stays underpaid until a
-top-up pays it or an admin refunds it. A pending order expires late on purpose. The watcher expires
-it no sooner than two minutes after the deadline, and only right after a poll of its reference that
-succeeded. A transaction that the RPC node lists for the reference but cannot return yet also holds
-the expiry back, for up to an hour after the deadline; after that the order expires, and its event
-names the transactions that never resolved. The one exception to a successful poll is a reference
-that the node can never list: after the same hour, its order expires too. An RPC outage or a slow
-index therefore delays the expiry, instead of expiring an order that was paid on time.
-
-Every other move is refused, a move to the same status included: for example expired → paid (a late
-payment never pays an order), pending → refunded (nothing was received) or any move out of
-refunded. `order.Transition` is the one place that lists the moves, and every status change passes
-it first. The statement that stores a change is also conditional on the old status
-(`UPDATE … WHERE id = $1 AND status = $2`) and must change exactly one row, so two writers that
-read the same order cannot both move it. The schema checks only that the status is one of the six
-values; it does not encode the moves a second time.
+`order.Transition` is the one list of moves and refuses all others, such as expired → paid. The
+UPDATE that stores a move also names the old status, so of two writers only one moves the order: a
+payment or refund that changes no row rolls back, and an expiry or first download changes nothing.
+The schema checks values, not moves, so the rules have one copy, in Go.
 
 ## Payment detection
 
-An order's payments are found through its reference, and `payment.Verify` then works out how much
-each transaction pays towards that order. It is a pure function of the transaction, the merchant
-address and the reference, so its rules are tested on recorded devnet payments and hand-built
-transactions, with no RPC node involved.
+Each poll lists the newest 100 transactions for the order's reference, with
+`getSignaturesForAddress` at `confirmed`. The reference is public once the QR code is shown, so
+anyone can attach junk transactions to it; a listing of 100 keeps a few from pushing the payment
+out, and costs one call whatever its length. New signatures are verified oldest first, and a failed
+transaction is rejected without being fetched.
 
-A transaction pays an order the sum of its top-level System Program transfers to the merchant that
-list the order's reference among their extra accounts, which is where Solana Pay wallets and devpay
-put it. Other instructions are ignored wherever they sit, so a wallet may add a compute budget or a
-memo, and the transfer need not come last. A transfer to the merchant without the reference does
-not count, even in a transaction that pays the order. Legacy, v0 and v1 transactions verify the
-same way, and keys that a v0 transaction loads from an address lookup table count like any other.
+`payment.Verify`, a pure function tested on recorded devnet transactions, credits the sum of the
+top-level System Program transfers to the merchant that list the reference, in legacy, v0 or v1
+transactions. The sum must not exceed the merchant's balance gain, which catches a merchant paying
+itself and a misread transaction. A transaction that pays nothing is stored with its reason.
 
-The sum is then checked against the merchant's balance, which must have grown by at least as much.
-That catches a transaction whose payer is the merchant, where the transfer moves nothing and the
-balance falls by the fee, and it guards against a transaction that was misread. A transaction that
-pays nothing gets a reason, which the payment ledger keeps with it: it failed on chain, no transfer
-matched, its transfers claimed more than the balance gained, or it could not be read.
+All calls share one limiter, one call every 1.25 s: 8 per 10 s, under the 10 per method observed on
+the public devnet endpoint, with 2 left for a block explorer. The documented limits, 40 per method
+and 100 in all, are higher. A pending order is due every poll interval (5 s by default), and an
+underpaid one until its deadline; then underpaid and expired orders are due each minute until an
+hour past the deadline, the late window, so they add little. A tick polls up to 8 due orders, the
+longest due first, and a full batch starts the next tick at once. A poll costs one listing plus one
+`getTransaction` per new signature, so a round of N due orders takes about the longer of N × 1.25 s
+and the poll interval, plus 1.25 s per new signature: 12.5 s for 10 orders, 44 s for 35.
 
-Alternative considered: crediting the merchant's balance change alone. It needs no instruction
-decoding, but it would credit the order with everything the merchant received in the transaction,
-a transfer for another order or one without the reference included, and nothing would tie the
-money to the transfer that lists the reference.
+Polling needs only the public RPC endpoint. A plain wallet Send and `solana transfer` cannot attach
+a reference, so the repository's devpay pays a Solana Pay URL as a wallet does, on devnet only. A
+Solana Pay URL names no cluster, so a mainnet wallet would pay real SOL that the shop never sees;
+the order page warns about this, and prices are a few thousandths of a SOL.
 
-Each poll asks the RPC node for the newest 100 transactions that list the order's reference, at
-`confirmed` commitment, with `getSignaturesForAddress`. The watcher skips those the ledger already
-holds, and fetches and verifies the rest oldest first, so the transfer that completes the amount is
-the one that pays the order. A transaction that failed on chain is rejected from the listing alone,
-without being fetched.
+## Idempotency
 
-Every call to the node waits its turn at the client's limiter, one call every 1.25 s: at most 8 in
-10 s, under the 10 per method that the public devnet endpoint reports, with 2 left for a block
-explorer in a browser on the same IP. The documented limits, 40 per method and 100 in all per 10 s,
-are higher, but the observed one is what counts. A poll costs one `getSignaturesForAddress`, plus
-one `getTransaction` for each new signature. A tick polls up to 8 due orders, about one 10 s window
-of calls, and when it polls a full batch the next tick starts at once. A round of N due orders
-therefore takes about the longer of N × 1.25 s and the poll interval, plus 1.25 s for each new
-signature: 10 orders take about 12.5 s, and 35 about 44 s. Underpaid and expired orders past their
-deadline are polled once a minute, so they add little to N; a pending order keeps the poll interval
-until it expires, two minutes or more after its deadline.
+`products` is the catalogue. `orders` holds the status, the amount fixed when the order is placed,
+and `received_lamports`, the sum credited. `payments` is the ledger, one row per signature, and
+`payment_events` an append-only log, ordered by id, that nothing reads to decide state. Amounts
+are integer lamports.
 
-The order page shows the request as a QR code drawn on the server and an "Open in wallet" link, with
-the address, the amount and the reference, and reloads itself every 5 seconds while a payment sent
-on time is still expected: a meta refresh, with no JavaScript, at the cost of redrawing the code and
-clearing a text selection on each reload. A Solana Pay URL names no cluster, so a wallet set to
-mainnet would pay it with real SOL, which the shop, watching devnet only, never sees. The page warns
-about this above the code, and the demo prices stay at a few thousandths of a SOL.
-
-Alternative considered: a webhook from an indexing service. It would report a payment within a
-second or two, but it needs an account with the provider, a public URL for the shop, and polling
-anyway to catch up on the calls the shop missed while it was down. Polling needs only the public RPC
-endpoint, which lists the transactions that mention any account, a reference included.
-
-## Downloads
-
-A paid order downloads its file by a signed link, `/d/{order_id}?exp=…&sig=…`. `exp` is the time the
-link stops working, 15 minutes after it was made, and `sig` is an HMAC-SHA256 of the order id and
-`exp` under `DOWNLOAD_SECRET`. Each read of a paid or fulfilled order through the API signs a new
-link. A link that the shop did not make, or whose order or expiry was changed, is refused before the
-database is read, whatever its expiry, so guessing at the route costs a hash and nothing more.
-
-The signature is not a second secret. The order id is the customer's key to the order, and the
-link names the order, so whoever holds a link can read the order and get a new link from it: a
-leaked link is as good as a leaked order id. What the expiry limits is the URL itself: a copy of it,
-in a bookmark or a forwarded mail, stops downloading after 15 minutes. Alternative considered: a
-separate random download key per order, so that a link does not reveal the order. A leaked link
-would then be worth 15 minutes at most. It costs a column and a lookup by key, and was left out
-because the order id has to stay private anyway, since it alone reads the order.
-
-A link downloads only while the order is paid or fulfilled, so a refund stops it. The first GET
-marks a paid order fulfilled and stores `download.issued`, in one transaction, with an
-`UPDATE … WHERE status = 'paid'`, so two first downloads at once store one event. It does so only
-once the file has opened, so a missing file leaves the order paid for a later try, and a HEAD
-request, such as a link checker's, never fulfils. Fulfilled means that the link was used, not that
-the whole file arrived. Files are read through an `os.Root` over the files directory, so no name
-leads outside it, and the download is named after the product's slug, never the name the file is
-stored under. These rules live in `download`; the handler, which leaves Range and conditional
-requests to `http.ServeContent`, lives in `web`.
-
-## Data model
-
-Four tables. `products` holds the catalogue. `orders` holds each order's state: the amount is a
-snapshot of price times quantity, and `received_lamports` is the sum of the payments credited to
-it. `payments` is the ledger: one row per transaction signature, which is a global primary key, so
-a transaction credits at most one order, and only once. `payment_events` is an append-only log
-of what happened to each order and what the watcher saw (orders created, payments seen, RPC
-errors), ordered by its identity column; nothing reads it to decide state. Amounts are integers in
-lamports throughout; SOL appears only in pages and in the payment URL.
-
-Alternative considered: a single `paid_signature` column on `orders`. It cannot represent a top-up,
-where one order is paid by several transactions.
-
-## Transactions
-
-Every change to an order is one database transaction that also saves the events it causes, and
-the code for these transactions lives in `internal/db`. The services decide what should happen;
-the store makes it atomic.
-
-- Placing an order inserts the order and its `order.created` event.
-- A refund locks the order's row (`SELECT … FOR UPDATE`) and then reads the order in a second
-  statement, which lets the order service check the status and whether a late payment arrived.
-  It then moves the order to refunded with `UPDATE … WHERE id = $1 AND status = $2`, which must
-  change exactly one row, and inserts the `order.refunded` event.
-- Applying a payment, expiring an order and marking it fulfilled follow the same pattern. The
-  status change passes `order.Transition`, the UPDATE names the old status, and the events, plus
-  the ledger row for a payment, go in the same transaction. Applying a payment locks the row too,
-  because it reads the order before it decides; expiry and fulfilment rely on the conditional
-  UPDATE alone.
-
-A payment is credited once, however often it is seen. Applying one stores its ledger row first,
-with `INSERT … ON CONFLICT (signature) DO NOTHING`; if the signature is already there, the
-transaction stores only a `payment.duplicate_ignored` event and changes nothing else. The order's
-received total moves only in the transaction that stored the row, so a payment that the watcher
-sees again, after a restart or from a second watcher, adds nothing. The row lock does another job:
-when two payments to one order are applied at once, the second waits for the first and reads the
-total it stored, so neither overwrites the other's credit.
-
-If any step fails, the whole transaction rolls back, and its events are logged only after a
-commit. Transactions run at Postgres's default level, READ COMMITTED: the row lock and the
-conditional UPDATE are what keep two writers from moving the same order twice.
-
-At READ COMMITTED each statement sees the data as it was when that statement began. That is why a
-refund reads the order in a statement after the lock: a locking read that had to wait would return
-the newest version of the order's row, but would still miss a late payment that the transaction
-holding the lock recorded meanwhile.
+The signature is the ledger's primary key across all orders, so a transaction credits one order,
+once. Applying a payment is one transaction: lock the order's row, read it, decide, insert the
+ledger row (`ON CONFLICT DO NOTHING`), make the conditional UPDATE, insert the events, commit, then
+log them. The watcher skips signatures the ledger holds; one that another watcher stored first adds
+only `payment.duplicate_ignored`, and the lock makes a second payment read the first one's total,
+so two watchers are still correct. Payments and refunds read
+the order in a statement after the lock, so at READ COMMITTED they see the lock holder's commit.
 
 ## Failure modes
 
-The watcher assumes that the RPC node and the database fail from time to time, and that the shop
-itself stops and restarts. None of that may lose a payment or credit one twice.
-
-- The node fails, times out or rate-limits the shop. Each call has a 10 s deadline, the wait at the
-  limiter included. The failure is recorded as `rpc.error` or `rpc.timeout` and ends the tick, and
-  the watcher backs off: with the default 5 s poll interval, 10, 20 and 40 s, then a minute between
-  ticks while the node keeps failing, and at least 15 s after a 429. The first tick that succeeds
-  returns to the poll interval.
-- The node serves another cluster. The watcher checks the genesis hash before its first poll and
-  polls nothing until the check passes. On another cluster the server shuts down and exits 1; a
-  check that fails for any other reason is retried like any other call.
-- The node lists a transaction before it can return it. The transaction is left for the next poll
-  and holds the order's expiry back, as described above, for up to an hour.
-- A transaction cannot be used: it failed on chain, the node can never return it, or it does not pay
-  the order. It is recorded as rejected, with its reason, and changes nothing.
-- A customer pays too little, too much or too late. The order becomes underpaid, paid with the
-  surplus logged as a warning, or stays as it is with the payment recorded as late, for a refund.
-- A wallet sends a plain transfer without the reference. The shop finds payments only by their
-  reference, so it never sees this one.
-- The database fails in one order's poll. The failure is recorded as `watcher.error`, the tick goes
-  on to the next order, and the order is polled again on its next turn.
-- The shop stops in the middle of a tick. The open transaction rolls back, and the next tick finds
-  the same transactions and applies each once. On a signal the server first stops taking requests,
-  then stops the watcher, and then closes the database pool; what the tick applied before the stop
-  stays, and the poll that the stop cuts short records no failure.
+- RPC down, slow or rate-limited: each call has a 10 s deadline, the limiter's wait included. The
+  failure is recorded as `rpc.error` or `rpc.timeout` and ends the tick. The watcher backs off (by
+  default 10, 20, 40 s, then a minute), at least 15 s after a 429. A listing that can never
+  succeed ends only its order's poll; it is the one failure that lets a pending order expire
+  without a successful poll, once the late window ends.
+- A failed devnet check: nothing is polled until the genesis hash check passes; on another cluster
+  the server exits 1.
+- Index lag: a listed transaction that the node cannot return yet waits for the next poll, and a
+  pending order expires only after a successful poll at least 2 minutes past its deadline.
+- A signature that never resolves holds the expiry back until the late window ends; the expiry
+  event names it.
+- Duplicates and under, over or late payments follow the rules above.
+- A failed or undecodable transaction is stored as rejected and changes nothing.
+- A plain Send without the reference is never detected; the order expires.
+- A database error in one order's poll is recorded as `watcher.error`; the tick goes on.
+- A restart mid-poll rolls the open transaction back; the next tick applies each payment once.
+- A failed migration changes nothing, but marks the schema version dirty, and the server refuses
+  to start until it is fixed; in development, `docker compose down -v` starts over.
+- A crash during a download: fulfilment commits once the file has opened. A fulfilled order still
+  downloads, by the same link or a new one from the order page or the API, and a Range request
+  resumes the file.
 
 ## Out of scope
 
-Deliberately not built: user accounts, carts with several products, taxes and shipping, mainnet,
-SPL tokens, in-browser wallet adapters, webhooks from indexing services, a message queue, product
-file uploads, and refunds sent on chain.
+Not built: accounts, carts, taxes and shipping, mainnet, SPL tokens, wallet adapters, webhooks, a
+message queue, file uploads and on-chain refunds. Known limitations:
 
-Known limitations:
-
-- Paid orders are no longer watched, so a second payment to a paid order is not detected.
-- A payment made more than an hour after the order's deadline is not detected: unpaid orders are
-  watched for one hour past their deadline, which keeps RPC use bounded.
-- Each poll reads only the newest 100 transactions that mention an order's reference, so a payment
-  followed by 100 or more others before the next poll is missed.
-- Only top-level System Program transfers count. A transfer made by another program (a
-  cross-program invocation) is not credited.
+- Paid orders are not polled, so a second payment is missed unless the poll that paid the order
+  lists it too; then it counts as an overpayment.
+- A payment after the late window is not detected; the window bounds RPC use.
+- A payment followed by 100 or more others before the next poll is missed.
+- Transfers made by another program (cross-program invocations) are not credited.
 
 ## For production on mainnet
 
-- `finalized` commitment instead of `confirmed`, and handling of rolled-back blocks.
-- Custody and key management for the merchant wallet, and refunds sent on chain.
-- A queue between payment detection and fulfilment, so each side can retry and scale on its own.
-- Metrics and alerts: watcher lag, RPC error rate, orders stuck in one state.
-- Rate limiting on order creation.
-- A private RPC endpoint, and one scan of the merchant address per tick instead of one query per
-  open order.
-- Secrets from a secret manager instead of a `.env` file.
-- A retention policy for the events log.
-- Automated dependency updates for Go modules and GitHub Actions.
+- `finalized` commitment and handling of rolled-back blocks.
+- A private RPC endpoint and one scan of the merchant address per tick.
+- Custody and key management for the merchant wallet, and on-chain refunds.
+- A queue between detection and fulfilment, and rate limiting on order creation.
+- Metrics and alerts on watcher lag, RPC errors and stuck orders.
+- Secrets from a secret manager instead of `.env`, and a retention policy for the event log.
+- Dependabot for Go modules and GitHub Actions, grouped weekly.
+
+## Decisions and alternatives
+
+| Chosen | Alternative | Why |
+|---|---|---|
+| A ledger, one row per signature | a `paid_signature` column on `orders` | a top-up pays one order with several transactions |
+| Polling the public RPC node | webhooks from an indexer | no provider account or public URL; a webhook still needs polling after downtime |
+| A reference per order | a memo; a deposit address per order | one call lists a reference's transactions; a memo needs a scan of the merchant's payments, a deposit address a key per order |
+| Matching transfers, checked against the balance gain | the balance change alone | it would credit every transfer to the merchant, with or without the reference |
+| `confirmed` | `finalized` | a payment shows sooner; a rolled-back block is an accepted risk on devnet |
+| One listing per watched reference | one scan of the merchant address | each listing holds only its order's transactions; the scan suits many open orders |
+| Migrations at server start, under an advisory lock | a separate job only | `go run ./cmd/server` needs no extra step; compose runs `-migrate-only` first, for the seed |
+| An injected `now`, and `testing/synctest` | a clock interface | synctest fakes the standard timers, so the code needs no wrapper |
+
+Go 1.27 is required, for the standard library's `uuid` package, which is new in 1.27.
