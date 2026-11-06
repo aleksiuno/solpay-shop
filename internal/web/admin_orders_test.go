@@ -159,7 +159,7 @@ func TestAdminOrderListRefusesAnUnknownStatus(t *testing.T) {
 		a := &orderAdmin{orders: []order.Order{pending}}
 		body := requirePage(t, get(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders?status="+status), http.StatusBadRequest)
 		assert.Zero(t, a.lists, status)
-		assert.Contains(t, body, `<title>Orders · solpay-shop</title>`, status)
+		assert.Contains(t, body, `<title>Orders · solpay-shop admin</title>`, status)
 		assert.Contains(t, body, `<form class="filter" method="get" action="/admin/orders">`, status)
 		assert.Contains(t, body, "</form>\n"+`<p class="problem" role="alert">There is no such status.</p>`, status)
 		assert.Contains(t, body, `<option value="">All</option>`, status)

@@ -96,7 +96,8 @@ func TestOrderPageShowsHowToPay(t *testing.T) {
 	assert.NotContains(t, body, `href="/d/`)
 }
 
-// Each state of the order shows its own text, and the page reloads itself only while a payment
+// Each state of the order shows its own text under a heading that is also the page's title, so
+// that a tab in the background shows the state, and the page reloads itself only while a payment
 // sent on time is still expected.
 func TestOrderPageByState(t *testing.T) {
 	paidAt := deadline.Add(-5 * time.Minute)
@@ -153,6 +154,7 @@ func TestOrderPageByState(t *testing.T) {
 			body := orderAt(t, o, tt.now)
 
 			assert.Contains(t, body, "<h1>"+tt.heading+"</h1>")
+			assert.Contains(t, body, "<title>"+tt.heading+" · solpay-shop</title>")
 			for _, text := range tt.texts {
 				assert.Contains(t, body, text)
 			}

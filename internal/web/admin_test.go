@@ -150,6 +150,18 @@ func TestAdminPagesShareNavigation(t *testing.T) {
 	}
 }
 
+// Admin titles are marked, so that a tab or the history tells an admin page from the shop's page
+// of the same name.
+func TestAdminTitles(t *testing.T) {
+	admin := newAdmin(&productAdmin{})
+	assert.Contains(t, requirePage(t, get(admin, "/admin/products"), http.StatusOK), "<title>Products · solpay-shop admin</title>")
+	assert.Contains(t, requirePage(t, get(admin, "/admin/products/"+retired.ID.String()+"/edit"), http.StatusNotFound),
+		"<title>Not found · solpay-shop admin</title>", "an error page too")
+
+	shop, _ := newSite(web.Deps{Products: &catalogue{}})
+	assert.Contains(t, requirePage(t, get(shop, "/"), http.StatusOK), "<title>Products · solpay-shop</title>")
+}
+
 // send gets path, or posts form to it when form is set.
 func send(h http.Handler, path string, form url.Values) *httptest.ResponseRecorder {
 	if form == nil {
