@@ -1,5 +1,17 @@
 {{define "content"}}
 <h1>Events</h1>
+<form class="filter" method="get" action="/admin/events">
+<label for="order_id">Order id</label>
+<input id="order_id" name="order_id" value="{{.OrderID}}" size="36" spellcheck="false">
+<label for="level">Level</label>
+<select id="level" name="level">
+<option value="">All</option>
+{{- range .Levels}}
+<option{{if eq . $.Level}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select>
+<button type="submit">Show</button>
+</form>
 {{- with .Problem}}
 <p class="problem" role="alert">{{.}}</p>
 {{- else}}
@@ -8,7 +20,7 @@
 <thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Order</th><th>Message</th><th>Details</th></tr></thead>
 <tbody>
 {{- range .Events}}
-<tr class="lvl-{{.Kind.Level}}"><td>{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{with .OrderID}}<a href="/admin/orders/{{.}}" title="{{.}}"><code>{{printf "%.8s" .}}</code></a>{{end}}</td><td>{{.Message}}</td><td>{{with .Signature}}<a href="https://explorer.solana.com/tx/{{.}}?cluster=devnet" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
+<tr class="lvl-{{.Kind.Level}}"><td>{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{with .OrderID}}<a href="/admin/events?order_id={{.}}" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> (<a href="/admin/orders/{{.}}">order</a>){{end}}</td><td>{{.Message}}</td><td>{{with .Signature}}<a href="https://explorer.solana.com/tx/{{.}}?cluster=devnet" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
 {{- else}}
 <tr><td colspan="6">No events.</td></tr>
 {{- end}}

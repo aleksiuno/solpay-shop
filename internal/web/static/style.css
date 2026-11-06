@@ -50,8 +50,8 @@ table.events td:last-child { min-width: 10rem; overflow-wrap: anywhere; }
 .product-form input, .product-form textarea, .product-form select { padding: 0.4rem; font: inherit; }
 .product-form .check { margin: 0.5rem 0; }
 .product-form button { justify-self: start; }
-.filter { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0; }
-.filter select { padding: 0.3rem; font: inherit; }
+.filter { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 1rem 0; }
+.filter select, .filter input { max-width: 100%; padding: 0.3rem; font: inherit; }
 .flag { color: #8a5a00; font-weight: 600; }
 tr.lvl-warn { background: var(--warn-bg); }
 tr.lvl-error { background: #fde8e6; }
