@@ -66,14 +66,25 @@ func (o Order) CheckRefund() error {
 	return Transition(o.Status, Refunded)
 }
 
-// Credit works out what an on-time payment of lamports does to a pending or underpaid order: the
-// status it moves to, and its new received total. The order is paid once the total reaches the
-// amount, and underpaid while the total is short. Credit changes nothing itself.
+// Credit works out what an on-time payment of lamports does to an order: the status it moves to,
+// and its new received total. A pending or underpaid order is paid once the total reaches the
+// amount, and underpaid while the total is short. A paid or fulfilled order keeps its status: the
+// payment is an overpayment, such as one sent in the same poll as the payment that paid the order.
+// Credit changes nothing itself.
 //
-// Crediting an order in any other status returns an error wrapping ErrInvalidTransition. A payment
-// that is not positive, or one that would take the total above the int64 range, is also an error.
+// Crediting an order in any other status, expired or refunded, returns an error wrapping
+// ErrInvalidTransition. A payment that is not positive, or one that would take the total above the
+// int64 range, is also an error.
 func (o Order) Credit(lamports int64) (next Status, received int64, err error) {
-	if o.Status != Pending && o.Status != Underpaid {
+	switch o.Status {
+	case Pending, Underpaid:
+		next = Underpaid
+	case Paid, Fulfilled:
+		next = o.Status
+	case Expired, Refunded:
+		// A payment to an expired or refunded order is late: recorded, never credited.
+	}
+	if next == "" {
 		return "", 0, fmt.Errorf("%w: cannot credit a payment to an order that is %q", ErrInvalidTransition, o.Status)
 	}
 	if lamports <= 0 {
@@ -83,11 +94,11 @@ func (o Order) Credit(lamports int64) (next Status, received int64, err error) {
 		return "", 0, fmt.Errorf("order: crediting %d lamports to %d received overflows int64", lamports, o.ReceivedLamports)
 	}
 	received = o.ReceivedLamports + lamports
-	next = Underpaid
-	if received >= o.AmountLamports {
+	if next == Underpaid && received >= o.AmountLamports {
 		next = Paid
 	}
-	// A top-up that is still short leaves an underpaid order where it is: no move to check.
+	// A top-up that is still short leaves an underpaid order where it is, and an overpayment leaves
+	// a paid or fulfilled one where it is: no move to check.
 	if next != o.Status {
 		if err := Transition(o.Status, next); err != nil {
 			return "", 0, err
