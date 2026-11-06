@@ -408,7 +408,7 @@ the admin credentials.
 | `POST` | `/checkout` | places an order from the form and answers `303` to the order's page |
 | `GET` | `/orders/{id}` | the order: its QR code and wallet link while it can be paid, its download link once paid |
 | `GET` | `/orders/{id}/qr.png` | a PNG QR code of `payment.url` while the order can be paid; `404` otherwise |
-| `GET` | `/static/style.css` | the style sheet |
+| `GET` | `/static/style.css` | the style sheet, with an `ETag`; a browser checks its copy on every page and gets `304` while it is the same |
 | `GET` | `/admin/` | redirects to `/admin/orders` |
 | `GET` | `/admin/orders` | the newest orders, with the `?status=` filter of the API |
 | `GET` | `/admin/orders/{id}` | an order with its payments, its events and the refund form |

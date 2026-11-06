@@ -5,7 +5,9 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -85,7 +87,7 @@ type site struct {
 // Register adds the public routes to mux.
 func Register(mux *http.ServeMux, d Deps) {
 	s := site{Deps: d, pages: parsePages()}
-	mux.HandleFunc("GET /static/style.css", styles)
+	mux.HandleFunc("GET /static/style.css", styles())
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /p/{slug}", s.product)
 	mux.HandleFunc("POST /checkout", s.checkout)
@@ -107,9 +109,23 @@ func parsePages() map[string]*template.Template {
 	return pages
 }
 
-// styles sends the style sheet, the one static file.
-func styles(w http.ResponseWriter, r *http.Request) {
-	http.ServeFileFS(w, r, assets, "static/style.css")
+// styles returns the handler of the style sheet, the one static file. An embedded file has no
+// modification time, so the sheet's ETag, the first 8 bytes of its SHA-256 taken once here, is
+// what lets a browser check the copy it has: http.ServeContent answers a matching If-None-Match
+// with a 304 and no body. no-cache has the browser ask on every page, so a new sheet shows at once.
+func styles() http.HandlerFunc {
+	css, err := assets.ReadFile("static/style.css")
+	if err != nil {
+		panic(err) // the sheet is embedded, so every test fails first
+	}
+	sum := sha256.Sum256(css)
+	tag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	return func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("ETag", tag)
+		h.Set("Cache-Control", "no-cache")
+		http.ServeContent(w, r, "style.css", time.Time{}, bytes.NewReader(css))
+	}
 }
 
 // view is what the base layout shows around a page: its title, whether it reloads itself every
