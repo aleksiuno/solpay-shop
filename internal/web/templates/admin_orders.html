@@ -10,6 +10,9 @@
 </select>
 <button type="submit">Show</button>
 </form>
+{{- with .Problem}}
+<p class="problem" role="alert">{{.}}</p>
+{{- else}}
 <div class="table-scroll">
 <table class="list">
 <thead><tr><th>Created</th><th>Product</th><th>Licences</th><th>Amount</th><th>Received</th><th>Status</th><th>Flags</th></tr></thead>
@@ -23,5 +26,6 @@
 </table>
 </div>
 <p class="notice">The newest {{len .Orders}} orders; the list shows at most 100.</p>
+{{- end}}
 <p><a href="/admin/events">The event log</a></p>
 {{end}}

@@ -58,18 +58,23 @@ func newAdminOrder(o order.Order, now time.Time) adminOrder {
 	return a
 }
 
-// orderList is what the admin's order list shows. The filter offers Statuses in their order.
+// orderList is what the admin's order list shows: the orders, the filter, and what was wrong
+// with the filter. The filter offers Statuses in their order.
 type orderList struct {
 	Orders   []adminOrder
 	Status   order.Status // the filter, or "" for every status
 	Statuses []order.Status
+	Problem  string
 }
 
 // adminOrders lists the newest orders, all of them or those in the status that ?status= names.
+// Any other value shows the filter with the problem and no orders: 400.
 func (s site) adminOrders(w http.ResponseWriter, r *http.Request) {
 	status, statuses := order.Status(r.URL.Query().Get("status")), order.Statuses()
+	list := orderList{Status: status, Statuses: statuses}
 	if status != "" && !slices.Contains(statuses, status) {
-		s.problem(w, r, http.StatusBadRequest, "Bad request", "There is no such status.")
+		list.Problem = "There is no such status."
+		s.render(w, r, http.StatusBadRequest, "admin_orders.html", view{Title: "Orders", Data: list})
 		return
 	}
 	orders, err := s.OrderAdmin.List(r.Context(), order.ListFilter{Status: status})
@@ -77,7 +82,6 @@ func (s site) adminOrders(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	list := orderList{Status: status, Statuses: statuses}
 	// The clock is read once, so that every row is flagged at the same instant.
 	now := s.Now()
 	for _, o := range orders {

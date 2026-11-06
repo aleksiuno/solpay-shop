@@ -152,11 +152,22 @@ func TestAdminOrderListByStatus(t *testing.T) {
 	}
 }
 
+// An unknown status shows the list's filter with the problem and no orders, as the event log
+// shows a bad filter, rather than the shop's error page.
 func TestAdminOrderListRefusesAnUnknownStatus(t *testing.T) {
-	a := &orderAdmin{}
-	body := requirePage(t, get(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders?status=lost"), http.StatusBadRequest)
-	assert.Contains(t, body, "There is no such status.")
-	assert.Zero(t, a.lists)
+	for _, status := range []string{"lost", "PAID", "paid%20"} {
+		a := &orderAdmin{orders: []order.Order{pending}}
+		body := requirePage(t, get(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders?status="+status), http.StatusBadRequest)
+		assert.Zero(t, a.lists, status)
+		assert.Contains(t, body, `<title>Orders · solpay-shop</title>`, status)
+		assert.Contains(t, body, `<form class="filter" method="get" action="/admin/orders">`, status)
+		assert.Contains(t, body, "</form>\n"+`<p class="problem" role="alert">There is no such status.</p>`, status)
+		assert.Contains(t, body, `<option value="">All</option>`, status)
+		assert.NotContains(t, body, "selected", status)
+		assert.NotContains(t, body, "<table", status)
+		assert.NotContains(t, body, "The newest", status)
+		assert.Contains(t, body, `<p><a href="/admin/events">The event log</a></p>`, status)
+	}
 }
 
 func TestAdminOrderListWhenTheStoreFails(t *testing.T) {
