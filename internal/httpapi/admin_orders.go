@@ -29,11 +29,6 @@ type EventLog interface {
 	List(ctx context.Context, f audit.ListFilter) ([]audit.Event, error)
 }
 
-// orderStatuses are the statuses that ?status= may name.
-var orderStatuses = []order.Status{
-	order.Pending, order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded,
-}
-
 // adminOrderJSON is an order as the admin API shows it: what the store holds, without the payment
 // request and the download link that the public API adds.
 type adminOrderJSON struct {
@@ -108,8 +103,8 @@ func newEventJSON(ev audit.Event) eventJSON {
 // ?status= names: {"orders": [...]}.
 func (a api) listAdminOrders(w http.ResponseWriter, r *http.Request) {
 	status := order.Status(r.URL.Query().Get("status"))
-	if status != "" && !slices.Contains(orderStatuses, status) {
-		writeError(w, http.StatusBadRequest, codeInvalidRequest, "status must be one of pending, underpaid, paid, fulfilled, expired, refunded")
+	if statuses := order.Statuses(); status != "" && !slices.Contains(statuses, status) {
+		writeError(w, http.StatusBadRequest, codeInvalidRequest, "status must be one of "+oneOf(statuses))
 		return
 	}
 	orders, err := a.OrderAdmin.List(r.Context(), order.ListFilter{Status: status})

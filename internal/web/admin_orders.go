@@ -33,11 +33,6 @@ type EventLog interface {
 	List(ctx context.Context, f audit.ListFilter) ([]audit.Event, error)
 }
 
-// statuses are the order statuses, in the order the admin's filter offers them.
-var statuses = []order.Status{
-	order.Pending, order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded,
-}
-
 // adminOrder is an order as the admin pages show it, with the flags that call for a look.
 type adminOrder struct {
 	order.Order
@@ -63,7 +58,7 @@ func newAdminOrder(o order.Order, now func() time.Time) adminOrder {
 	return a
 }
 
-// orderList is what the admin's order list shows.
+// orderList is what the admin's order list shows. The filter offers Statuses in their order.
 type orderList struct {
 	Orders   []adminOrder
 	Status   order.Status // the filter, or "" for every status
@@ -72,7 +67,7 @@ type orderList struct {
 
 // adminOrders lists the newest orders, all of them or those in the status that ?status= names.
 func (s site) adminOrders(w http.ResponseWriter, r *http.Request) {
-	status := order.Status(r.URL.Query().Get("status"))
+	status, statuses := order.Status(r.URL.Query().Get("status")), order.Statuses()
 	if status != "" && !slices.Contains(statuses, status) {
 		s.problem(w, r, http.StatusBadRequest, "Bad request", "There is no such status.")
 		return

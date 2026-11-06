@@ -129,11 +129,9 @@ func read(t *testing.T, f download.File) string {
 	return string(b)
 }
 
-var statuses = []order.Status{order.Pending, order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded}
-
 // Only a paid or fulfilled order gets a link, which works for 15 minutes.
 func TestLink(t *testing.T) {
-	for _, s := range statuses {
+	for _, s := range order.Statuses() {
 		t.Run(string(s), func(t *testing.T) {
 			r := newRig(t, s)
 			link, ok := r.svc.Link(r.store.order)

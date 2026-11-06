@@ -106,13 +106,13 @@ func TestAdminEventsPages(t *testing.T) {
 // The filter is the order and the level asked for, and the page links keep it.
 func TestAdminEventsByOrderAndLevel(t *testing.T) {
 	id := pending.ID
-	for _, l := range levels {
+	for _, l := range audit.Levels() {
 		e := &eventLog{events: fullPage(250)}
 		// An id in capitals, or pasted with spaces around it, is the same id.
 		body := requirePage(t, get(adminEvents(e), "/admin/events?order_id=+"+strings.ToUpper(id.String())+"+&level="+string(l)+"&before=300"), http.StatusOK)
 		assert.Equal(t, audit.ListFilter{OrderID: &id, Level: l, Before: 300}, e.filter)
 		assert.Contains(t, body, `<input id="order_id" name="order_id" value="`+id.String()+`"`)
-		for _, other := range levels {
+		for _, other := range audit.Levels() {
 			assert.Equal(t, other == l, strings.Contains(body, "<option selected>"+string(other)+"</option>"), "%s selected for %s", other, l)
 		}
 		assert.Contains(t, body, `<a href="/admin/events?level=`+string(l)+`&amp;order_id=`+id.String()+`">← Newest</a>`)
@@ -126,9 +126,6 @@ func TestAdminEventsByOrderAndLevel(t *testing.T) {
 	assert.NotContains(t, body, "← Newest")
 	assert.Contains(t, body, `<p><a href="/admin/events?before=151&amp;level=warn&amp;order_id=`+id.String()+`">Older →</a></p>`)
 }
-
-// levels are the event levels.
-var levels = []audit.Level{audit.Info, audit.Warn, audit.Error}
 
 // A filter that names nothing shows the page with the problem and the filter as sent, and no
 // events.

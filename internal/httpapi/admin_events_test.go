@@ -79,7 +79,7 @@ func TestAdminListEventsPages(t *testing.T) {
 
 func TestAdminListEventsByOrderAndLevel(t *testing.T) {
 	id := pending.ID
-	for _, l := range []audit.Level{audit.Info, audit.Warn, audit.Error} {
+	for _, l := range audit.Levels() {
 		e := &eventLog{}
 		// An id in capitals is the same id.
 		w := get(newEventsAPI(e), "/api/v1/admin/events?order_id="+strings.ToUpper(id.String())+"&level="+string(l)+"&before=300")

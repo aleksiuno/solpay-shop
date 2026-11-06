@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
@@ -39,6 +40,15 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	var body errorBody
 	body.Error.Code, body.Error.Message = code, message
 	writeJSON(w, status, body)
+}
+
+// oneOf lists vs, the values a query parameter may take, for an error message: "a, b, c".
+func oneOf[S ~string](vs []S) string {
+	names := make([]string, len(vs))
+	for i, v := range vs {
+		names[i] = string(v)
+	}
+	return strings.Join(names, ", ")
 }
 
 // writeJSON writes v as JSON with status.

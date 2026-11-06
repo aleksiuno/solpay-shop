@@ -44,6 +44,7 @@ func TestKindLevels(t *testing.T) {
 	for _, k := range kinds {
 		assert.Equal(t, k.value, string(k.kind))
 		assert.Equal(t, k.level, k.kind.Level(), "%s", k.kind)
+		assert.Contains(t, audit.Levels(), k.level, "%s", k.kind)
 	}
 }
 
@@ -53,7 +54,13 @@ func TestUnknownKindIsAnError(t *testing.T) {
 	}
 }
 
-// TestLevelsMatchSchema checks the level constants against the level CHECK in the migrations.
+func TestLevelsGivesANewSliceEachTime(t *testing.T) {
+	l := audit.Levels()
+	l[0] = "changed"
+	assert.Equal(t, audit.Info, audit.Levels()[0])
+}
+
+// TestLevelsMatchSchema checks Levels against the level CHECK in the migrations.
 func TestLevelsMatchSchema(t *testing.T) {
 	files, err := fs.Glob(migrations.FS, "*.up.sql")
 	require.NoError(t, err)
@@ -72,5 +79,5 @@ func TestLevelsMatchSchema(t *testing.T) {
 	for v := range strings.SplitSeq(values, ",") {
 		schema = append(schema, audit.Level(strings.Trim(strings.TrimSpace(v), "'")))
 	}
-	assert.ElementsMatch(t, []audit.Level{audit.Info, audit.Warn, audit.Error}, schema)
+	assert.ElementsMatch(t, audit.Levels(), schema)
 }

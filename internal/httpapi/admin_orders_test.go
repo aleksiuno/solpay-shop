@@ -129,7 +129,7 @@ func TestAdminListsOrders(t *testing.T) {
 		"paid_at": null, "fulfilled_at": null, "refunded_at": null}`
 	assert.JSONEq(t, `{"orders": [`+withRef(paidJSON)+`, `+withRef(lateJSON)+`]}`, w.Body.String())
 
-	for _, s := range []order.Status{order.Pending, order.Underpaid, order.Fulfilled, order.Expired, order.Refunded} {
+	for _, s := range order.Statuses() {
 		a := &orderAdmin{}
 		assert.Equal(t, http.StatusOK, get(newOrderAdminAPI(a, ledger{}, &eventLog{}), "/api/v1/admin/orders?status="+string(s)).Code)
 		assert.Equal(t, order.ListFilter{Status: s}, a.filter)

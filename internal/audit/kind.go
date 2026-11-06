@@ -11,6 +11,12 @@ const (
 	Error Level = "error"
 )
 
+// Levels returns every level, from the least attention to the most, as a new slice that the caller
+// may change.
+func Levels() []Level {
+	return []Level{Info, Warn, Error}
+}
+
 // Kind says what happened. Each kind has a fixed level.
 type Kind string
 
