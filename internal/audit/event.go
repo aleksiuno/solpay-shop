@@ -24,6 +24,9 @@ type Event struct {
 	CreatedAt time.Time // set by the database
 }
 
+// PageSize is the most events that one list of them holds: a page of the log.
+const PageSize = 100
+
 // ListFilter selects the events to list. Each field that is set narrows the list, and the zero
 // ListFilter matches every event.
 type ListFilter struct {

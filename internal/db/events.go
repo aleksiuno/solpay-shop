@@ -12,9 +12,6 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/db/sqlcdb"
 )
 
-// EventsPageSize is the most events that Events.List returns at once.
-const EventsPageSize = 100
-
 // Events saves and lists the payment event log. It implements audit.Store.
 type Events struct {
 	pool *pgxpool.Pool
@@ -68,10 +65,10 @@ func insertEvents(ctx context.Context, q *sqlcdb.Queries, evs []audit.Event) err
 	return nil
 }
 
-// List returns up to EventsPageSize events that match f, newest first. Numbers in an event's data
+// List returns up to audit.PageSize events that match f, newest first. Numbers in an event's data
 // come back as json.Number, so a lamport amount keeps every digit.
 func (e *Events) List(ctx context.Context, f audit.ListFilter) ([]audit.Event, error) {
-	p := sqlcdb.ListEventsParams{OrderID: f.OrderID, PageSize: EventsPageSize}
+	p := sqlcdb.ListEventsParams{OrderID: f.OrderID, PageSize: audit.PageSize}
 	if f.Level != "" {
 		level := string(f.Level)
 		p.Level = &level

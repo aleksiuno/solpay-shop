@@ -15,6 +15,7 @@ body {
   background: #fafafa;
 }
 header.site, main, footer.site { max-width: 42rem; margin: 0 auto; padding: 1rem; }
+body.wide :is(header.site, main, footer.site) { max-width: 76rem; }
 header.site { display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--line); }
 .brand { font-weight: 700; color: var(--ink); text-decoration: none; }
 .tag { font-size: 0.75rem; padding: 0.1rem 0.4rem; border-radius: 0.25rem; background: var(--warn-bg); border: 1px solid var(--warn-line); }
@@ -42,6 +43,9 @@ code { font: 0.875rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 table.list { width: 100%; border-collapse: collapse; }
 table.list th, table.list td { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 table.list td { overflow-wrap: anywhere; }
+table.events td { overflow-wrap: normal; }
+table.events td:first-child { min-width: 7.5rem; }
+table.events td:last-child { min-width: 10rem; overflow-wrap: anywhere; }
 .product-form { display: grid; gap: 0.4rem; max-width: 32rem; margin: 1rem 0; }
 .product-form input, .product-form textarea, .product-form select { padding: 0.4rem; font: inherit; }
 .product-form .check { margin: 0.5rem 0; }
