@@ -46,8 +46,8 @@ func TestContextHandlerAddsTheRequestID(t *testing.T) {
 	log, buf := newLogger()
 	h := httpapi.RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		log.InfoContext(r.Context(), "plain")
-		log.With("order_id", "o1").InfoContext(r.Context(), "with")
-		log.WithGroup("g").InfoContext(r.Context(), "group", "k", "v")
+		log.With(slog.String("order_id", "o1")).InfoContext(r.Context(), "with")
+		log.WithGroup("g").InfoContext(r.Context(), "group", slog.String("k", "v"))
 	}))
 	w := serve(h, httptest.NewRequest(http.MethodGet, "/", nil))
 	log.InfoContext(t.Context(), "outside a request")
