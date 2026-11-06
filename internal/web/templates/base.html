@@ -9,7 +9,7 @@
 <title>{{.Title}} · solpay-shop</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body{{if .Wide}} class="wide"{{end}}>
 <header class="site"><a class="brand" href="/">solpay-shop</a> <span class="tag">devnet</span></header>
 <main>
 {{template "content" .Data}}

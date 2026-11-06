@@ -130,7 +130,7 @@ func TestEventsListFilters(t *testing.T) {
 func TestEventsListPages(t *testing.T) {
 	events := db.NewEvents(pool)
 	order := newOrder(t)
-	const total = db.EventsPageSize + 5
+	const total = audit.PageSize + 5
 	var evs []audit.Event
 	for i := range total {
 		evs = append(evs, audit.Event{OrderID: &order, Kind: audit.PaymentSeen, Message: fmt.Sprint(i)})
@@ -139,7 +139,7 @@ func TestEventsListPages(t *testing.T) {
 
 	first, err := events.List(t.Context(), audit.ListFilter{OrderID: &order})
 	require.NoError(t, err)
-	require.Len(t, first, db.EventsPageSize)
+	require.Len(t, first, audit.PageSize)
 	second, err := events.List(t.Context(), audit.ListFilter{OrderID: &order, Before: first[len(first)-1].ID})
 	require.NoError(t, err)
 	require.Len(t, second, 5)

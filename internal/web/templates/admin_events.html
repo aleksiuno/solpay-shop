@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>Events</h1>
+{{- with .Problem}}
+<p class="problem" role="alert">{{.}}</p>
+{{- else}}
+<div class="table-scroll">
+<table class="list events">
+<thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Order</th><th>Message</th><th>Details</th></tr></thead>
+<tbody>
+{{- range .Events}}
+<tr class="lvl-{{.Kind.Level}}"><td>{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{with .OrderID}}<a href="/admin/orders/{{.}}" title="{{.}}"><code>{{printf "%.8s" .}}</code></a>{{end}}</td><td>{{.Message}}</td><td>{{with .Signature}}<a href="https://explorer.solana.com/tx/{{.}}?cluster=devnet" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
+{{- else}}
+<tr><td colspan="6">No events.</td></tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+{{- if or .Newest .Older}}
+<p>{{with .Newest}}<a href="{{.}}">← Newest</a>{{end}}{{if and .Newest .Older}} · {{end}}{{with .Older}}<a href="{{.}}">Older →</a>{{end}}</p>
+{{- end}}
+<p class="notice">Newest first, at most {{.PerPage}} events a page.</p>
+{{- end}}
+<p><a href="/admin/orders">All orders</a></p>
+{{end}}

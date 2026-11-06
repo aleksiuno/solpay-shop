@@ -100,7 +100,7 @@ func parsePages() map[string]*template.Template {
 	pages := map[string]*template.Template{}
 	for _, name := range []string{
 		"home.html", "product.html", "order.html", "error.html", "admin_products.html", "admin_product_form.html",
-		"admin_orders.html", "admin_order.html",
+		"admin_orders.html", "admin_order.html", "admin_events.html",
 	} {
 		pages[name] = template.Must(template.New(name).Funcs(funcs).ParseFS(assets, "templates/base.html", "templates/"+name))
 	}
@@ -113,10 +113,11 @@ func styles(w http.ResponseWriter, r *http.Request) {
 }
 
 // view is what the base layout shows around a page: its title, whether it reloads itself every
-// 5 seconds, and the page's own data.
+// 5 seconds, whether it takes the full width for a wide table, and the page's own data.
 type view struct {
 	Title   string
 	Refresh bool
+	Wide    bool
 	Data    any
 }
 
