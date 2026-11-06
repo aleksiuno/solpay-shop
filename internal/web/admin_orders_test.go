@@ -166,7 +166,7 @@ func TestAdminOrderListRefusesAnUnknownStatus(t *testing.T) {
 		assert.NotContains(t, body, "selected", status)
 		assert.NotContains(t, body, "<table", status)
 		assert.NotContains(t, body, "The newest", status)
-		assert.Contains(t, body, `<p><a href="/admin/events">The event log</a></p>`, status)
+		assert.Contains(t, body, navBar("/admin/orders", "page"), status)
 	}
 }
 

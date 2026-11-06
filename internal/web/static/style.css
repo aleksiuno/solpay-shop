@@ -16,7 +16,9 @@ body {
 }
 header.site, main, footer.site { max-width: 42rem; margin: 0 auto; padding: 1rem; }
 body.wide :is(header.site, main, footer.site) { max-width: 76rem; }
-header.site { display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--line); }
+header.site { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--line); }
+nav.admin { display: flex; gap: 1rem; margin-left: auto; }
+nav.admin a[aria-current] { color: var(--ink); font-weight: 600; }
 .brand { font-weight: 700; color: var(--ink); text-decoration: none; }
 .tag { font-size: 0.75rem; padding: 0.1rem 0.4rem; border-radius: 0.25rem; background: var(--warn-bg); border: 1px solid var(--warn-line); }
 footer.site { color: var(--muted); font-size: 0.875rem; border-top: 1px solid var(--line); }

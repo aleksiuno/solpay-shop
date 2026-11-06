@@ -65,7 +65,6 @@ func TestAdminEventsLog(t *testing.T) {
 <option>error</option>
 </select>`,
 		`<p class="notice">Newest first, at most 100 events a page.</p>`,
-		`<p><a href="/admin/orders">All orders</a></p>`,
 	} {
 		assert.Contains(t, body, want)
 	}
@@ -146,7 +145,6 @@ func TestAdminEventsRefusesABadFilter(t *testing.T) {
 		assert.Contains(t, body, `<p class="problem" role="alert">`+tt.problem+`</p>`, tt.query)
 		assert.Contains(t, body, `<input id="order_id" name="order_id" value="`+tt.orderID+`"`, tt.query)
 		assert.NotContains(t, body, "<table", tt.query)
-		assert.Contains(t, body, `<p><a href="/admin/orders">All orders</a></p>`, tt.query)
 		assert.Contains(t, body, `<body class="wide">`, tt.query)
 	}
 }
@@ -155,11 +153,11 @@ func TestAdminEventsWhenTheStoreFails(t *testing.T) {
 	requirePage(t, get(adminEvents(&eventLog{err: errBoom}), "/admin/events"), http.StatusInternalServerError)
 }
 
-// The order list links to the log, and an order's page to its events there.
+// The order list links to the log, by the navigation bar, and an order's page to its events there.
 func TestAdminOrderPagesLinkToTheLog(t *testing.T) {
 	mux := adminOrders(&orderAdmin{orders: []order.Order{pending}}, ledger{}, &eventLog{})
 	body := requirePage(t, get(mux, "/admin/orders"), http.StatusOK)
-	assert.Contains(t, body, `<a href="/admin/events">The event log</a>`)
+	assert.Contains(t, body, `<a href="/admin/events">Events</a>`)
 	assert.Contains(t, body, "<body>", "only the event log takes the full width")
 	assert.Contains(t, requirePage(t, get(mux, "/admin/orders/"+pending.ID.String()), http.StatusOK),
 		`<a href="/admin/events?order_id=`+pending.ID.String()+`">The order in the event log</a>`)

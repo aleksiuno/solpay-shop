@@ -80,9 +80,11 @@ var funcs = template.FuncMap{
 	},
 }
 
-// site serves the web routes with its Deps.
+// site serves the web routes with its Deps. admin marks the admin's site, whose pages carry the
+// navigation bar.
 type site struct {
 	Deps
+	admin bool
 }
 
 // Register adds the public routes to mux. A path that no route on mux serves gets the error page,
@@ -141,17 +143,24 @@ func styles() http.HandlerFunc {
 }
 
 // view is what the base layout shows around a page: its title, whether it reloads itself every
-// 5 seconds, whether it takes the full width for a wide table, and the page's own data.
+// 5 seconds, whether it takes the full width for a wide table, whether it is an admin page and the
+// admin's navigation bar if so, and the page's own data.
 type view struct {
 	Title   string
 	Refresh bool
 	Wide    bool
+	Admin   bool
+	Nav     []navLink
 	Data    any
 }
 
 // render writes page with v and status. It renders into a buffer first, so a template that fails
-// gives a 500 instead of half a page.
+// gives a 500 instead of half a page. An admin page gets the admin's navigation bar, error pages
+// included, so that no admin page is a dead end.
 func (s site) render(w http.ResponseWriter, r *http.Request, status int, page string, v view) {
+	if s.admin {
+		v.Admin, v.Nav = true, adminNav(r, page == "error.html")
+	}
 	var buf bytes.Buffer
 	if err := pages[page].ExecuteTemplate(&buf, "base", v); err != nil {
 		s.Log.LogAttrs(r.Context(), slog.LevelError, "page render failed", slog.String("page", page), slog.Any("error", err))
