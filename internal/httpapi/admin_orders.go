@@ -97,6 +97,13 @@ type eventJSON struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+func newEventJSON(ev audit.Event) eventJSON {
+	return eventJSON{
+		ID: ev.ID, OrderID: ev.OrderID, Level: ev.Kind.Level(), Kind: ev.Kind, Message: ev.Message,
+		Signature: ev.Signature, Data: ev.Data, CreatedAt: ev.CreatedAt.UTC(),
+	}
+}
+
 // listAdminOrders answers with the newest orders, all of them or those in the status that
 // ?status= names: {"orders": [...]}.
 func (a api) listAdminOrders(w http.ResponseWriter, r *http.Request) {
@@ -155,10 +162,7 @@ func (a api) getAdminOrder(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	for _, ev := range events {
-		out.Events = append(out.Events, eventJSON{
-			ID: ev.ID, OrderID: ev.OrderID, Level: ev.Kind.Level(), Kind: ev.Kind, Message: ev.Message,
-			Signature: ev.Signature, Data: ev.Data, CreatedAt: ev.CreatedAt.UTC(),
-		})
+		out.Events = append(out.Events, newEventJSON(ev))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
