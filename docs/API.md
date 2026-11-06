@@ -234,7 +234,8 @@ curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/products -d '{
 
 - `slug` is 1 to 64 characters of `a-z` and `0-9`, in groups joined by single hyphens, and no other
   product may have it.
-- `title` is 1 to 120 characters, and `description` at most 2,000; spaces around both are dropped.
+- `title` is 1 to 120 characters, and `description` at most 2,000; spaces around both are dropped,
+  and the description's CRLF line breaks are stored as LF, so that each counts as one character.
 - `price_lamports` is the price of one licence, from 1 to 1,000,000,000,000 (1,000 SOL).
 - `file_name` is the bare name of a file in `FILES_DIR`: at most 255 letters, digits, dots, hyphens
   and underscores, starting with a letter or a digit. The file must be there.

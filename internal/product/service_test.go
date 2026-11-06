@@ -3,6 +3,7 @@ package product_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -105,6 +106,25 @@ func TestCreate(t *testing.T) {
 	assert.Equal(t, "A checklist for payment code in Go.", got.Description, "the description is trimmed")
 	assert.Equal(t, got, r.products[got.ID])
 	assert.Equal(t, []string{"go-payments-checklist.md"}, f.asked)
+}
+
+// A browser counts a line break in a text area as one character but sends it as CRLF. The
+// description is stored with LF whether it comes from the form or the API.
+func TestLineBreaksAreStoredAsLF(t *testing.T) {
+	s, r, _ := newService()
+	p := valid()
+	p.Description = strings.Repeat("ž", 999) + "\r\n" + strings.Repeat("ž", 1000)
+	created, err := s.Create(t.Context(), p)
+	require.NoError(t, err, "2000 characters, one of them a line break")
+	assert.Equal(t, strings.Repeat("ž", 999)+"\n"+strings.Repeat("ž", 1000), created.Description)
+	assert.Equal(t, created, r.products[created.ID])
+
+	p = created
+	p.Description = "First line.\r\nSecond line.\r\n"
+	got, err := s.Update(t.Context(), p)
+	require.NoError(t, err)
+	assert.Equal(t, "First line.\nSecond line.", got.Description, "and trimmed")
+	assert.Equal(t, got, r.products[created.ID])
 }
 
 func TestCreateRefusesAnInvalidProduct(t *testing.T) {

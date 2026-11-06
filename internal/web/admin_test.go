@@ -146,14 +146,15 @@ func TestAdminCreatesAProduct(t *testing.T) {
 	assert.Equal(t, int64(5_000_000), a.saved[1].PriceLamports, "spaces around the price are dropped")
 }
 
-// Line breaks are stored as LF, as the browser counted them, not CRLF, as it sends them.
-func TestAdminStoresLineBreaksAsLF(t *testing.T) {
+// The description goes to the product service as the browser sent it, its line breaks as CRLF;
+// the service stores them as LF.
+func TestAdminSendsTheDescriptionAsSent(t *testing.T) {
 	a := &productAdmin{}
 	form := productForm()
 	form.Set("description", "First line.\r\nSecond line.")
 	post(newAdmin(a), "/admin/products", form)
 	require.Len(t, a.saved, 1)
-	assert.Equal(t, "First line.\nSecond line.", a.saved[0].Description)
+	assert.Equal(t, "First line.\r\nSecond line.", a.saved[0].Description)
 }
 
 // A price that is not an amount of SOL shows the form again, as sent, without storing anything.
