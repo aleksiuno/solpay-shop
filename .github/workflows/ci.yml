@@ -1,4 +1,5 @@
 name: ci
+# The Makefile pins the same golangci-lint, sqlc and govulncheck versions; change them in both.
 on:
   pull_request:
   push:
@@ -7,7 +8,8 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push replaces a pull request's run; on main it waits, so no run there is cut short.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   ci:
     name: ci
@@ -15,6 +17,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no later step fetches or pushes
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -31,7 +35,7 @@ jobs:
       - name: sqlc diff
         run: sqlc diff
       - name: go test (race, integration)
-        run: go test -race -tags=integration -count=1 ./...
+        run: go test -race -shuffle=on -tags=integration -count=1 ./...
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -test -tags=integration ./...
       - name: docker build

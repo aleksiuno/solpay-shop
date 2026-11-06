@@ -18,7 +18,7 @@
 
 ## Checklist
 
-- [ ] `make lint test` passes (and `make test-integration` if `internal/db` changed)
+- [ ] `make check test-integration` passes
 - [ ] docs/API.md and docs/DESIGN.md updated if behaviour or a decision changed
 - [ ] No TODOs; follow-ups are GitHub issues
 - [ ] No secrets, private keys or .env files, and no wallet address outside test fixtures and screenshots
