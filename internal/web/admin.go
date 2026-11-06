@@ -47,17 +47,17 @@ func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	mux.Handle("/admin/", s.unknown(mux, "/admin/"))
 }
 
-// adminSection is a section of the admin, by the path of its list page and its name in the
-// navigation bar.
+// adminSection is a section of the admin, by the path of its list page, its name in the
+// navigation bar, and the text of a link back to its list from one of its error pages.
 type adminSection struct {
-	path, name string
+	path, name, back string
 }
 
 // adminSections are the admin's sections, in the order its navigation bar lists them.
 var adminSections = []adminSection{
-	{path: "/admin/orders", name: "Orders"},
-	{path: "/admin/events", name: "Events"},
-	{path: "/admin/products", name: "Products"},
+	{path: "/admin/orders", name: "Orders", back: "All orders"},
+	{path: "/admin/events", name: "Events", back: "The event log"},
+	{path: "/admin/products", name: "Products", back: "All products"},
 }
 
 // current returns the aria-current of the section's entry in the navigation bar, on the page that r
@@ -89,6 +89,19 @@ func adminNav(r *http.Request, failed bool) []navLink {
 		nav[i] = navLink{Href: sec.path, Text: sec.name, Current: sec.current(r, failed)}
 	}
 	return nav
+}
+
+// adminBack returns the link back from an admin error page that r asks for: to the list of the
+// page's section, or to the orders, where the admin opens, from a page in none.
+func adminBack(r *http.Request) (href, text string) {
+	back := adminSections[0]
+	for _, sec := range adminSections {
+		if sec.current(r, true) != "" {
+			back = sec
+			break
+		}
+	}
+	return back.path, back.back
 }
 
 // productForm is what the product form shows: the fields as they stand, the files to choose
