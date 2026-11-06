@@ -121,29 +121,33 @@ func TestGetProduct(t *testing.T) {
 }
 
 // A failure under a request whose own context has ended (the client hung up, or the server is
-// stopping) is logged as canceled, not as an error of the shop, whatever the error says.
+// stopping) is logged as canceled, not as an error of the shop, whatever the error says. The line
+// carries the context's cause, which tells the two apart: a client that hung up leaves a plain
+// context.Canceled, and the server cuts requests off with a cause of its own.
 func TestProductsWhenTheRequestIsCanceled(t *testing.T) {
 	tests := []struct {
-		name     string
-		err      error
-		canceled bool
-		level    string
-		msg      string
+		name  string
+		err   error
+		cause error // what ended the request's context; nil leaves it live
+		level string
+		msg   string
 	}{
-		{"a canceled request, its error wrapping the cancel", fmt.Errorf("list products: %w", context.Canceled), true,
-			"WARN", "request canceled"},
-		{"a canceled request with another error", errors.New("conn closed"), true, "WARN", "request canceled"},
-		{"a live request with an error that wraps a cancel", fmt.Errorf("list products: %w", context.Canceled), false,
+		{"a canceled request, its error wrapping the cancel", fmt.Errorf("list products: %w", context.Canceled),
+			context.Canceled, "WARN", "request canceled"},
+		{"a canceled request with another error", errors.New("conn closed"), context.Canceled, "WARN", "request canceled"},
+		{"a request the server cut off", fmt.Errorf("list products: %w", context.Canceled),
+			errors.New("server: shutdown timed out"), "WARN", "request canceled"},
+		{"a live request with an error that wraps a cancel", fmt.Errorf("list products: %w", context.Canceled), nil,
 			"ERROR", "request failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mux, buf := newAPI(httpapi.Deps{Products: &catalogue{err: tt.err}})
-			ctx, cancel := context.WithCancel(t.Context())
-			if tt.canceled {
-				cancel()
+			ctx, cancel := context.WithCancelCause(t.Context())
+			if tt.cause != nil {
+				cancel(tt.cause)
 			}
-			defer cancel()
+			defer cancel(nil)
 			w := serve(mux, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/products", nil))
 
 			assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -151,6 +155,9 @@ func TestProductsWhenTheRequestIsCanceled(t *testing.T) {
 			require.Len(t, lines, 1)
 			assert.Equal(t, tt.level, lines[0]["level"])
 			assert.Equal(t, tt.msg, lines[0]["msg"])
+			if tt.cause != nil {
+				assert.Equal(t, tt.cause.Error(), lines[0]["cause"], "the context's cause, not only that it ended")
+			}
 		})
 	}
 }
