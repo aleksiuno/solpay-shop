@@ -18,11 +18,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/aleksiuno/solpay-shop/internal/audit"
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
 	"github.com/aleksiuno/solpay-shop/internal/order"
+	"github.com/aleksiuno/solpay-shop/internal/payment"
 	"github.com/aleksiuno/solpay-shop/internal/product"
+	"github.com/aleksiuno/solpay-shop/internal/solana/solanatest"
 	"github.com/aleksiuno/solpay-shop/internal/web"
 )
 
@@ -58,6 +61,58 @@ func newRouter() http.Handler {
 	downloads := download.NewService(nil, nil, []byte("test-only-download-secret-0123456789"), now)
 	return routes(cfg, log, web.Deps{Products: catalogue{}, Downloads: downloads, Log: log},
 		httpapi.Deps{DB: pinger{}, Products: catalogue{}, Log: log})
+}
+
+// placed is a pending order, due 15 minutes after it was placed.
+var placed = order.Order{
+	ID: uuid.MustParse("3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e"), ProductSlug: "go-payments-checklist",
+	ProductTitle: "Go payments checklist", Quantity: 1, AmountLamports: 5_000_000,
+	Reference: solanatest.Key("reference"), Status: order.Pending,
+	CreatedAt: time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2026, 11, 6, 12, 15, 0, 0, time.UTC),
+}
+
+// orderBook holds one order, which every lookup finds, with no payments.
+type orderBook struct{ o order.Order }
+
+func (b orderBook) Create(context.Context, string, int) (order.Order, error) { return b.o, nil }
+
+func (b orderBook) Get(context.Context, uuid.UUID) (order.Order, error) { return b.o, nil }
+
+func (b orderBook) List(context.Context, order.ListFilter) ([]order.Order, error) {
+	return []order.Order{b.o}, nil
+}
+
+func (b orderBook) Refund(context.Context, uuid.UUID, string) (order.Order, error) { return b.o, nil }
+
+func (orderBook) Ledger(context.Context, uuid.UUID) ([]payment.Payment, error) { return nil, nil }
+
+// eventLog holds the one event of placing its order.
+type eventLog struct{ o order.Order }
+
+func (l eventLog) List(context.Context, audit.ListFilter) ([]audit.Event, error) {
+	ev := audit.Event{ID: 1, OrderID: &l.o.ID, Kind: audit.OrderCreated, Message: "order created", CreatedAt: l.o.CreatedAt}
+	return []audit.Event{ev}, nil
+}
+
+// newShop returns the server's real handler over a shop that holds the placed order and its
+// event, so that the routes that show an order answer 200. Its clock stands a minute after the
+// order was placed, while the order can be paid. Its download service, as newRouter's, has no
+// store and no files.
+func newShop() http.Handler {
+	log := slog.New(slog.DiscardHandler)
+	clock := func() time.Time { return placed.CreatedAt.Add(time.Minute) }
+	book, events := orderBook{placed}, eventLog{placed}
+	downloads := download.NewService(nil, nil, []byte("test-only-download-secret-0123456789"), clock)
+	merchant := solanatest.Key("merchant")
+	return routes(cfg, log,
+		web.Deps{
+			Products: catalogue{}, Orders: book, Downloads: downloads, Merchant: merchant, Now: clock,
+			OrderAdmin: book, Ledger: book, EventLog: events, Log: log,
+		},
+		httpapi.Deps{
+			DB: pinger{}, Products: catalogue{}, Orders: book, Downloads: downloads, OrderAdmin: book,
+			Ledger: book, EventLog: events, Merchant: merchant, Now: clock, Log: log,
+		})
 }
 
 func request(h http.Handler, method, path string, prepare ...func(*http.Request)) *httptest.ResponseRecorder {
@@ -341,6 +396,53 @@ func TestEveryResponseHasTheCommonHeaders(t *testing.T) {
 		assert.Len(t, sent.Get("X-Request-ID"), 36, tt.method+" "+tt.path)
 		assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"), tt.method+" "+tt.path)
 		assert.Equal(t, "same-origin", sent.Get("Referrer-Policy"), tt.method+" "+tt.path)
+	}
+}
+
+// Each kind of route adds its own headers to the common ones. No cache may keep an admin answer,
+// an answer that shows an order, a download's answer or the health check's; the style sheet is
+// checked on every page; and only the admin routes forbid framing.
+func TestHeadersByRouteKind(t *testing.T) {
+	h := newShop()
+	id := placed.ID.String()
+	tests := []struct {
+		name, path string
+		creds      bool // with the admin credentials
+		status     int
+		cache      string // the Cache-Control
+		frames     string // the X-Frame-Options
+	}{
+		{"home page", "/", false, http.StatusOK, "", ""},
+		{"order page", "/orders/" + id, false, http.StatusOK, "no-store", ""},
+		{"QR code", "/orders/" + id + "/qr.png", false, http.StatusOK, "no-store", ""},
+		{"download by a forged link", "/d/" + id + "?exp=1793534400&sig=c2lnbmF0dXJl", false, http.StatusForbidden, "no-store", ""},
+		{"API products", "/api/v1/products", false, http.StatusOK, "", ""},
+		{"API order", "/api/v1/orders/" + id, false, http.StatusOK, "no-store", ""},
+		{"health check", "/healthz", false, http.StatusOK, "no-store", ""},
+		{"style sheet", "/static/style.css", false, http.StatusOK, "no-cache", ""},
+		{"admin order list", "/admin/orders", true, http.StatusOK, "no-store", "DENY"},
+		{"admin order page", "/admin/orders/" + id, true, http.StatusOK, "no-store", "DENY"},
+		{"admin event log", "/admin/events", true, http.StatusOK, "no-store", "DENY"},
+		{"admin API orders", "/api/v1/admin/orders", true, http.StatusOK, "no-store", "DENY"},
+		{"admin API order", "/api/v1/admin/orders/" + id, true, http.StatusOK, "no-store", "DENY"},
+		{"admin API events", "/api/v1/admin/events", true, http.StatusOK, "no-store", "DENY"},
+		{"admin page without credentials", "/admin/orders", false, http.StatusUnauthorized, "no-store", "DENY"},
+		{"admin API without credentials", "/api/v1/admin/events", false, http.StatusUnauthorized, "no-store", "DENY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var prepare []func(*http.Request)
+			if tt.creds {
+				prepare = append(prepare, withAuth(adminUser, adminPass))
+			}
+			w := request(h, http.MethodGet, tt.path, prepare...)
+			require.Equal(t, tt.status, w.Code, w.Body.String())
+			sent := w.Result().Header // as written with the status, not as set later
+			assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"))
+			assert.Equal(t, "same-origin", sent.Get("Referrer-Policy"))
+			assert.Equal(t, tt.cache, sent.Get("Cache-Control"))
+			assert.Equal(t, tt.frames, sent.Get("X-Frame-Options"))
+		})
 	}
 }
 
