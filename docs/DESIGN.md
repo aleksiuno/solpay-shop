@@ -161,6 +161,8 @@ the order in a statement after the lock, so at READ COMMITTED they see the lock 
 - A crash during a download: fulfilment commits once the file has opened. A fulfilled order still
   downloads, by the same link or a new one from the order page or the API, and a Range request
   resumes the file.
+- A slow download: pages keep the server's 30 s write timeout, but a download has 10 minutes to
+  send its file. One cut off after that resumes by a Range request, as after a crash.
 
 ## Out of scope
 

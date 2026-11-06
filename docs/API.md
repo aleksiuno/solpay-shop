@@ -191,6 +191,9 @@ to resume:
 curl -fC - -o go-payments-checklist.md 'localhost:8080/d/<ORDER_ID>?exp=<EXP>&sig=<SIG>'
 ```
 
+A download has 10 minutes to send the file; the server then closes the connection, and the command
+above fetches the rest while the link works; after that, read the order again for a new one.
+
 The first `GET` of a paid order moves it to `fulfilled`; `HEAD` checks the link and the file
 without that.
 

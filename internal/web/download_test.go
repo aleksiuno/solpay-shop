@@ -1,10 +1,12 @@
 package web_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,9 +49,10 @@ type call struct {
 	fulfil   bool
 }
 
-// downloads opens the checklist, or returns err. It notes each call.
+// downloads opens the checklist, or a file of text if set, or returns err. It notes each call.
 type downloads struct {
 	err     error
+	text    string
 	content *content
 	calls   []call
 }
@@ -59,7 +62,7 @@ func (d *downloads) Open(_ context.Context, id uuid.UUID, exp, sig string, fulfi
 	if d.err != nil {
 		return download.File{}, d.err
 	}
-	d.content = &content{Reader: strings.NewReader("the checklist")}
+	d.content = &content{Reader: strings.NewReader(cmp.Or(d.text, "the checklist"))}
 	return download.File{Name: "go-payments-checklist.md", ModTime: modTime, Content: d.content}, nil
 }
 
@@ -106,6 +109,27 @@ func TestDownloadAnswersARange(t *testing.T) {
 
 	assert.Equal(t, http.StatusPartialContent, w.Code)
 	assert.Equal(t, "check", w.Body.String())
+}
+
+// A file that takes longer to send than the server's write timeout allows still arrives whole. The
+// client reads nothing until that timeout has passed, by which time the file fills the socket's
+// buffers many times over.
+func TestDownloadOutlivesTheWriteTimeout(t *testing.T) {
+	text := strings.Repeat("x", 16<<20)
+	mux, _ := newSite(web.Deps{Downloads: &downloads{text: text}})
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL + link)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	time.Sleep(3 * srv.Config.WriteTimeout)
+	n, err := io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err, "read %d of %d bytes", n, len(text))
+	assert.Equal(t, int64(len(text)), n)
 }
 
 func TestDownloadRefusals(t *testing.T) {

@@ -6,11 +6,16 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"time"
 	"uuid"
 
 	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/order"
 )
+
+// downloadTimeout bounds the time a download has to send its file. The server's write timeout
+// suits a page, but would cut a large file off on a slow link.
+const downloadTimeout = 10 * time.Minute
 
 // download sends the file of the order in the path, by a link that download.Service.Link made.
 // GET downloads the file, and the first GET of a paid order marks it fulfilled; HEAD only checks
@@ -38,6 +43,9 @@ func (s site) download(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name}))
 	h.Set("X-Content-Type-Options", "nosniff")
+	// The deadline is real time, not the shop's clock. Setting it fails only for a writer that
+	// takes no deadline, such as a test's recorder.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(downloadTimeout))
 	http.ServeContent(w, r, f.Name, f.ModTime, f.Content)
 }
 
