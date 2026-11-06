@@ -47,12 +47,12 @@ func main() {
 	stdout := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
-		stdout.Error("invalid configuration", "error", err)
+		stdout.Error("invalid configuration", slog.Any("error", err))
 		os.Exit(1)
 	}
 	logger, closeLog, err := newLogger(stdout, cfg.LogFile)
 	if err != nil {
-		stdout.Error("open log file", "error", err)
+		stdout.Error("open log file", slog.Any("error", err))
 		os.Exit(1)
 	}
 	// Lines logged with a request's context carry its request id.
@@ -61,10 +61,10 @@ func main() {
 	runErr := run(logger, cfg, *migrateOnly)
 	if runErr != nil {
 		// Logged before the file is closed, so LOG_FILE also records why the server stopped.
-		logger.Error("server exited with an error", "error", runErr)
+		logger.Error("server exited with an error", slog.Any("error", runErr))
 	}
 	if err := closeLog(); err != nil {
-		stdout.Error("close log file", "error", err)
+		stdout.Error("close log file", slog.Any("error", err))
 	}
 	if runErr != nil {
 		os.Exit(1)
@@ -78,23 +78,26 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	// any phase, including a migration that is still connecting or waiting for its lock.
 	context.AfterFunc(ctx, stop)
 
-	logger.InfoContext(ctx, "starting", "version", version, "migrate_only", migrateOnly)
+	logger.LogAttrs(ctx, slog.LevelInfo, "starting",
+		slog.String("version", version), slog.Bool("migrate_only", migrateOnly))
 	if err := db.Migrate(cfg.DatabaseURL); err != nil {
 		return err
 	}
-	logger.InfoContext(ctx, "database schema is up to date")
+	logger.LogAttrs(ctx, slog.LevelInfo, "database schema is up to date")
 	if migrateOnly {
 		return nil
 	}
 	if ctx.Err() != nil {
-		logger.InfoContext(ctx, "stopping before the server starts", "cause", context.Cause(ctx))
+		logger.LogAttrs(ctx, slog.LevelInfo, "stopping before the server starts",
+			slog.Any("cause", context.Cause(ctx)))
 		return nil
 	}
 
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		if ctx.Err() != nil {
-			logger.InfoContext(ctx, "stopping before the server starts", "cause", context.Cause(ctx))
+			logger.LogAttrs(ctx, slog.LevelInfo, "stopping before the server starts",
+				slog.Any("cause", context.Cause(ctx)))
 			return nil
 		}
 		return err
@@ -172,7 +175,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
-	logger.InfoContext(ctx, "server started", "addr", ln.Addr().String())
+	logger.LogAttrs(ctx, slog.LevelInfo, "server started", slog.String("addr", ln.Addr().String()))
 
 	// The watcher returns early only when it cannot work, such as on a node that is not devnet.
 	// The server then shuts down as on a signal, and exits with the watcher's error.
@@ -180,9 +183,9 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 	case err := <-serveErr:
 		return errors.Join(fmt.Errorf("serve: %w", err), stopWatcher())
 	case <-watchDone:
-		logger.InfoContext(ctx, "shutting down", "cause", stopWatcher())
+		logger.LogAttrs(ctx, slog.LevelInfo, "shutting down", slog.Any("cause", stopWatcher()))
 	case <-ctx.Done():
-		logger.InfoContext(ctx, "shutting down", "cause", context.Cause(ctx))
+		logger.LogAttrs(ctx, slog.LevelInfo, "shutting down", slog.Any("cause", context.Cause(ctx)))
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
@@ -196,7 +199,7 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 		return errors.Join(fmt.Errorf("serve: %w", err), stopWatcher())
 	}
 	err = stopWatcher()
-	logger.InfoContext(ctx, "server stopped")
+	logger.LogAttrs(ctx, slog.LevelInfo, "server stopped")
 	return err
 }
 

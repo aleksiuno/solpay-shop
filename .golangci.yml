@@ -11,7 +11,7 @@ linters:
     exhaustive: { default-signifies-exhaustive: false }   # a new Status must break every switch
     govet: { enable-all: true, disable: [fieldalignment, shadow] }
     nolintlint: { require-explanation: true, require-specific: true }
-    sloglint: { no-mixed-args: true, key-naming-case: snake, context: scope }
+    sloglint: { attr-only: true, key-naming-case: snake, context: scope }
   exclusions:
     generated: strict
     presets: [comments, std-error-handling, common-false-positives]
