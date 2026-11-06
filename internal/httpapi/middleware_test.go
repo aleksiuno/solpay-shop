@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/stretchr/testify/assert"
@@ -97,6 +98,26 @@ func TestAccessLogKeepsFlushWorking(t *testing.T) {
 	}))
 	w := serve(h, httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.True(t, w.Flushed)
+}
+
+// A handler behind both recorders can still set its own deadlines, as the download handler does.
+// Only a real server's writer takes them: a test's recorder refuses every deadline.
+func TestAccessLogAndRecoverPassDeadlinesOn(t *testing.T) {
+	log, _ := newLogger()
+	errs := make(chan error, 2)
+	srv := httptest.NewServer(httpapi.AccessLog(log)(httpapi.Recover(log)(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			rc := http.NewResponseController(w)
+			errs <- rc.SetWriteDeadline(time.Now().Add(time.Minute))
+			errs <- rc.SetReadDeadline(time.Now().Add(time.Minute))
+		}))))
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.NoError(t, <-errs, "write deadline")
+	assert.NoError(t, <-errs, "read deadline")
 }
 
 func TestRecoverAnswersAPanicWithTheInternalEnvelope(t *testing.T) {
