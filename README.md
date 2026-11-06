@@ -102,6 +102,7 @@ More in [docs/DESIGN.md](docs/DESIGN.md). Where to look: `internal/order/state.g
 compose database (first `docker compose stop app`, as both use port 8080), and `make test` runs
 the unit tests, which need no Docker. `make test-integration` adds the Postgres tests, which need a
 running Docker daemon; unless `DOCKER_HOST` is set, the Makefile takes it from the current Docker
-context (tested on OrbStack). `make lint` runs the linters.
+context (tested on OrbStack). `make lint` runs the linters, and `make check test-integration`
+runs what CI runs, apart from the image build.
 
 Licence: MIT, see [LICENSE](LICENSE).
