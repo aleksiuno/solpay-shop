@@ -16,11 +16,11 @@
 <p class="problem" role="alert">{{.}}</p>
 {{- else}}
 <div class="table-scroll">
-<table class="list events">
+<table class="list">
 <thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Order</th><th>Message</th><th>Details</th></tr></thead>
 <tbody>
 {{- range .Events}}
-<tr class="lvl-{{.Kind.Level}}"><td>{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{with .OrderID}}<a href="/admin/events?order_id={{.}}" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> (<a href="/admin/orders/{{.}}">order</a>){{end}}</td><td>{{.Message}}</td><td>{{with .Signature}}<a href="https://explorer.solana.com/tx/{{.}}?cluster=devnet" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
+<tr class="lvl-{{.Kind.Level}}"><td class="time">{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{with .OrderID}}<a href="/admin/events?order_id={{.}}" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> (<a href="/admin/orders/{{.}}">order</a>){{end}}</td><td>{{.Message}}</td><td class="long">{{with .Signature}}<a href="https://explorer.solana.com/tx/{{.}}?cluster=devnet" title="{{.}}"><code>{{printf "%.8s" .}}</code></a> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
 {{- else}}
 <tr><td colspan="6">No events.</td></tr>
 {{- end}}

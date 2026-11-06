@@ -37,7 +37,7 @@
 <thead><tr><th>Transaction</th><th>Outcome</th><th>Amount</th><th>Slot</th><th>Block time</th></tr></thead>
 <tbody>
 {{- range .Payments}}
-<tr><td><a href="https://explorer.solana.com/tx/{{.Signature}}?cluster=devnet"><code>{{.Signature}}</code></a></td><td>{{.Outcome}}{{with .Reason}}: {{.}}{{end}}</td><td>{{sol .Lamports}} SOL</td><td>{{.Slot}}</td><td>{{with .BlockTime}}{{utc .}}{{else}}unknown{{end}}</td></tr>
+<tr><td class="long"><a href="https://explorer.solana.com/tx/{{.Signature}}?cluster=devnet"><code>{{.Signature}}</code></a></td><td>{{.Outcome}}{{with .Reason}}: {{.}}{{end}}</td><td>{{sol .Lamports}} SOL</td><td>{{.Slot}}</td><td class="time">{{with .BlockTime}}{{utc .}}{{else}}unknown{{end}}</td></tr>
 {{- else}}
 <tr><td colspan="5">No payments seen.</td></tr>
 {{- end}}
@@ -46,11 +46,11 @@
 </div>
 <h2>Events</h2>
 <div class="table-scroll">
-<table class="list events">
+<table class="list">
 <thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Message</th><th>Details</th></tr></thead>
 <tbody>
 {{- range .Events}}
-<tr class="lvl-{{.Kind.Level}}"><td>{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{.Message}}</td><td>{{with .Signature}}<code>{{.}}</code> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
+<tr class="lvl-{{.Kind.Level}}"><td class="time">{{utc .CreatedAt}}</td><td>{{.Kind.Level}}</td><td><code>{{.Kind}}</code></td><td>{{.Message}}</td><td class="long">{{with .Signature}}<code>{{.}}</code> {{end}}{{with .Data}}<code>{{json .}}</code>{{end}}</td></tr>
 {{- else}}
 <tr><td colspan="5">No events.</td></tr>
 {{- end}}

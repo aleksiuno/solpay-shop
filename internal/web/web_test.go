@@ -264,3 +264,13 @@ func TestAWrongMethodListsTheMethodsAsServeMuxDoes(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 	assert.Equal(t, want.Header().Get("Allow"), w.Header().Get("Allow"))
 }
+
+// List cells keep whole words, so a table too wide for the screen scrolls in its box. Only a cell
+// marked long breaks inside its value, and a cell marked time keeps the width of a date.
+func TestListCellsKeepWholeWords(t *testing.T) {
+	mux, _ := newSite(web.Deps{})
+	css := get(mux, "/static/style.css").Body.String()
+	assert.Contains(t, css, "table.list td.long { min-width: 10rem; overflow-wrap: anywhere; }")
+	assert.Contains(t, css, "table.list td.time { min-width: 7.5rem; }")
+	assert.NotContains(t, css, "\ntable.list td {", "no rule for every cell")
+}

@@ -6,7 +6,7 @@
 <thead><tr><th>Slug</th><th>Title</th><th>Price</th><th>File</th><th>For sale</th></tr></thead>
 <tbody>
 {{- range .}}
-<tr><td><code>{{.Slug}}</code></td><td><a href="/admin/products/{{.ID}}/edit">{{.Title}}</a></td><td>{{sol .PriceLamports}} SOL</td><td><code>{{.FileName}}</code></td><td>{{if .Active}}yes{{else}}no{{end}}</td></tr>
+<tr><td><code>{{.Slug}}</code></td><td><a href="/admin/products/{{.ID}}/edit">{{.Title}}</a></td><td>{{sol .PriceLamports}} SOL</td><td class="long"><code>{{.FileName}}</code></td><td>{{if .Active}}yes{{else}}no{{end}}</td></tr>
 {{- else}}
 <tr><td colspan="5">No products yet.</td></tr>
 {{- end}}
