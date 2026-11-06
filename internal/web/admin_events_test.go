@@ -49,13 +49,13 @@ func TestAdminEventsLog(t *testing.T) {
 	for _, want := range []string{
 		"<title>Events · solpay-shop</title>",
 		`<body class="wide">`, // the full width, for the table
-		`<tr class="lvl-error"><td>2026-11-05 12:11:00 UTC</td><td>error</td><td><code>rpc.error</code></td><td></td><td>RPC call failed</td>` +
-			`<td><code>` + html.EscapeString(`{"error":"a < b & c","method":"getSignaturesForAddress"}`) + `</code></td></tr>`,
-		`<tr class="lvl-warn"><td>2026-11-05 12:09:00 UTC</td><td>warn</td><td><code>payment.underpaid</code></td>` + orderCell +
-			`<td>payment short</td><td><a href="https://explorer.solana.com/tx/sig-underpaid?cluster=devnet" title="sig-underpaid"><code>sig-unde</code></a> ` +
+		`<tr class="lvl-error"><td class="time">2026-11-05 12:11:00 UTC</td><td>error</td><td><code>rpc.error</code></td><td></td><td>RPC call failed</td>` +
+			`<td class="long"><code>` + html.EscapeString(`{"error":"a < b & c","method":"getSignaturesForAddress"}`) + `</code></td></tr>`,
+		`<tr class="lvl-warn"><td class="time">2026-11-05 12:09:00 UTC</td><td>warn</td><td><code>payment.underpaid</code></td>` + orderCell +
+			`<td>payment short</td><td class="long"><a href="https://explorer.solana.com/tx/sig-underpaid?cluster=devnet" title="sig-underpaid"><code>sig-unde</code></a> ` +
 			`<code>` + html.EscapeString(`{"lamports":4000000}`) + `</code></td></tr>`,
-		`<tr class="lvl-info"><td>2026-11-05 11:55:00 UTC</td><td>info</td><td><code>order.created</code></td>` + orderCell +
-			`<td>order created</td><td></td></tr>`,
+		`<tr class="lvl-info"><td class="time">2026-11-05 11:55:00 UTC</td><td>info</td><td><code>order.created</code></td>` + orderCell +
+			`<td>order created</td><td class="long"></td></tr>`,
 		`<form class="filter" method="get" action="/admin/events">`,
 		`<input id="order_id" name="order_id" value="" size="36" spellcheck="false">`,
 		`<select id="level" name="level">

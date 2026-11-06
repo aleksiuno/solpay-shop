@@ -105,7 +105,7 @@ func TestAdminOrderList(t *testing.T) {
 
 	assert.Equal(t, order.ListFilter{}, a.filter, "every status")
 	assert.Contains(t, body, `<option value="">All</option>`)
-	assert.Contains(t, body, `<tr><td><a href="/admin/orders/`+late.ID.String()+`">2026-11-05 11:55:00 UTC</a></td>`+
+	assert.Contains(t, body, `<tr><td class="time"><a href="/admin/orders/`+late.ID.String()+`">2026-11-05 11:55:00 UTC</a></td>`+
 		`<td>Go payments checklist</td><td>2</td><td>0.01 SOL</td><td>0 SOL</td><td>expired</td><td><span class="flag">late payment</span></td></tr>`)
 	assert.Contains(t, body, `<td>0.012 SOL</td><td>paid</td><td><span class="flag">overpaid</span></td>`)
 	assert.Contains(t, body, `<td>0.004 SOL</td><td>underpaid</td><td><span class="flag">underpaid</span>, <span class="flag">window closed</span></td>`)
@@ -189,11 +189,11 @@ func TestAdminOrderPage(t *testing.T) {
 		"<dt>Status</dt><dd>refunded</dd>", "<dd>0.01 SOL</dd>", "<code>" + reference + "</code>",
 		"<dt>Deadline</dt><dd>2026-11-05 12:10:00 UTC</dd>", "<dt>Paid</dt><dd>2026-11-05 12:05:00 UTC</dd>",
 		"<dt>Refunded</dt><dd>2026-11-05 13:10:00 UTC</dd>",
-		`<a href="https://explorer.solana.com/tx/sig-credited?cluster=devnet"><code>sig-credited</code></a></td><td>credited</td><td>0.01 SOL</td><td>7</td><td>2026-11-05 12:04:00 UTC</td>`,
-		"<td>rejected: tx_failed</td><td>0 SOL</td><td>9</td><td>unknown</td>",
-		`<tr class="lvl-warn"><td>2026-11-05 12:11:00 UTC</td><td>warn</td><td><code>payment.late</code></td><td>payment after the deadline</td>` +
-			`<td><code>sig-late</code> <code>` + html.EscapeString(`{"lamports":2000}`) + `</code></td></tr>`,
-		`<tr class="lvl-info"><td>2026-11-05 11:55:00 UTC</td><td>info</td><td><code>order.created</code></td><td>order created</td><td></td></tr>`,
+		`<td class="long"><a href="https://explorer.solana.com/tx/sig-credited?cluster=devnet"><code>sig-credited</code></a></td><td>credited</td><td>0.01 SOL</td><td>7</td><td class="time">2026-11-05 12:04:00 UTC</td>`,
+		"<td>rejected: tx_failed</td><td>0 SOL</td><td>9</td><td class=\"time\">unknown</td>",
+		`<tr class="lvl-warn"><td class="time">2026-11-05 12:11:00 UTC</td><td>warn</td><td><code>payment.late</code></td><td>payment after the deadline</td>` +
+			`<td class="long"><code>sig-late</code> <code>` + html.EscapeString(`{"lamports":2000}`) + `</code></td></tr>`,
+		`<tr class="lvl-info"><td class="time">2026-11-05 11:55:00 UTC</td><td>info</td><td><code>order.created</code></td><td>order created</td><td class="long"></td></tr>`,
 		"<code>" + html.EscapeString(`{"note":"Q&A <said so>"}`) + "</code>",
 	} {
 		assert.Contains(t, body, want)

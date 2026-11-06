@@ -94,8 +94,8 @@ func TestAdminListsEveryProduct(t *testing.T) {
 	assert.Contains(t, body, `<a class="button" href="/admin/products/new">New product</a>`)
 	assert.Contains(t, body, "<tr><td><code>go-payments-checklist</code></td>"+
 		"<td><a href=\"/admin/products/"+checklist.ID.String()+"/edit\">Go payments checklist</a></td><td>0.005 SOL</td>"+
-		"<td><code>checklist-v2.md</code></td><td>yes</td></tr>")
-	assert.Contains(t, body, "<a href=\"/admin/products/"+retired.ID.String()+"/edit\">Old notes</a></td><td>0.001 SOL</td><td><code>old.md</code></td><td>no</td></tr>")
+		"<td class=\"long\"><code>checklist-v2.md</code></td><td>yes</td></tr>")
+	assert.Contains(t, body, "<a href=\"/admin/products/"+retired.ID.String()+"/edit\">Old notes</a></td><td>0.001 SOL</td><td class=\"long\"><code>old.md</code></td><td>no</td></tr>")
 }
 
 // The product list scrolls sideways on a narrow screen, as the other lists do, and names every

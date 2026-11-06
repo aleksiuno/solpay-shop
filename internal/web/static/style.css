@@ -43,10 +43,8 @@ pre { padding: 0.75rem; background: #f0f1f4; border-radius: 0.375rem; white-spac
 code { font: 0.875rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 table.list { width: 100%; border-collapse: collapse; }
 table.list th, table.list td { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-table.list td { overflow-wrap: anywhere; }
-table.events td { overflow-wrap: normal; }
-table.events td:first-child { min-width: 7.5rem; }
-table.events td:last-child { min-width: 10rem; overflow-wrap: anywhere; }
+table.list td.long { min-width: 10rem; overflow-wrap: anywhere; }
+table.list td.time { min-width: 7.5rem; }
 .product-form { display: grid; gap: 0.4rem; max-width: 32rem; margin: 1rem 0; }
 .product-form input, .product-form textarea, .product-form select { padding: 0.4rem; font: inherit; }
 .product-form .check { margin: 0.5rem 0; }
