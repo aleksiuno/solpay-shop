@@ -123,7 +123,7 @@ func TestAdminOrderList(t *testing.T) {
 }
 
 func TestAdminOrderListByStatus(t *testing.T) {
-	for _, s := range []order.Status{order.Pending, order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded} {
+	for _, s := range order.Statuses() {
 		a := &orderAdmin{}
 		body := requirePage(t, get(adminOrders(a, ledger{}, &eventLog{}), "/admin/orders?status="+string(s)), http.StatusOK)
 		assert.Equal(t, order.ListFilter{Status: s}, a.filter)

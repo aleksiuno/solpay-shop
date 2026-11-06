@@ -15,3 +15,9 @@ const (
 	Expired   Status = "expired"   // nothing paid by the deadline
 	Refunded  Status = "refunded"  // marked refunded by an admin; final
 )
+
+// Statuses returns every status, in the order of the constants above, as a new slice that the
+// caller may change.
+func Statuses() []Status {
+	return []Status{Pending, Underpaid, Paid, Fulfilled, Expired, Refunded}
+}

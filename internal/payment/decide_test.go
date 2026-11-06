@@ -249,8 +249,7 @@ func TestDecideRecordsARejectedTransaction(t *testing.T) {
 // Verify never calls a transaction valid unless it pays something, so a valid verdict of 0 or less
 // is a bug, whatever the order and the time.
 func TestDecideRefusesAValidVerdictThatPaysNothing(t *testing.T) {
-	statuses := []order.Status{order.Pending, order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded}
-	for _, status := range statuses {
+	for _, status := range order.Statuses() {
 		for _, at := range []*time.Time{&before, &after} {
 			for _, lamports := range []int64{0, -1} {
 				t.Run(fmt.Sprintf("%s at %s paying %d", status, at.Format(time.TimeOnly), lamports), func(t *testing.T) {

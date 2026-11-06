@@ -19,12 +19,6 @@ import (
 	"github.com/aleksiuno/solpay-shop/migrations"
 )
 
-// statuses is every status, as the tests loop over them. TestStatusListIsComplete keeps it in step
-// with the constants.
-var statuses = []order.Status{
-	order.Pending, order.Underpaid, order.Paid, order.Fulfilled, order.Expired, order.Refunded,
-}
-
 // allowed lists the nine moves of the state machine. It is written out here, not derived from
 // the code under test.
 var allowed = map[[2]order.Status]bool{
@@ -42,8 +36,8 @@ var allowed = map[[2]order.Status]bool{
 func TestTransitionAllPairs(t *testing.T) {
 	require.Len(t, allowed, 9)
 	pairs := 0
-	for _, from := range statuses {
-		for _, to := range statuses {
+	for _, from := range order.Statuses() {
+		for _, to := range order.Statuses() {
 			pairs++
 			err := order.Transition(from, to)
 			if allowed[[2]order.Status{from, to}] {
@@ -58,7 +52,7 @@ func TestTransitionAllPairs(t *testing.T) {
 
 func TestTransitionRejectsUnknownStatuses(t *testing.T) {
 	unknown := []order.Status{"", "PAID", "Paid", " paid", "paid ", "cancelled"}
-	for _, s := range statuses {
+	for _, s := range order.Statuses() {
 		for _, u := range unknown {
 			require.ErrorIs(t, order.Transition(s, u), order.ErrInvalidTransition, "%q → %q", s, u)
 			require.ErrorIs(t, order.Transition(u, s), order.ErrInvalidTransition, "%q → %q", u, s)
@@ -74,8 +68,9 @@ func TestTransitionErrorNamesBothStatuses(t *testing.T) {
 		`order: invalid status transition from "expired" to "paid"`)
 }
 
-// TestStatusListIsComplete checks statuses against the Status constants declared in the package
-// source, so a new status cannot escape the tests that loop over the list.
+// TestStatusListIsComplete checks Statuses against the Status constants declared in the package
+// source, so a new status cannot be left out of the list that the tests loop over and the admin
+// filters accept.
 func TestStatusListIsComplete(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
@@ -109,10 +104,16 @@ func TestStatusListIsComplete(t *testing.T) {
 			}
 		}
 	}
-	assert.ElementsMatch(t, statuses, declared)
+	assert.ElementsMatch(t, order.Statuses(), declared)
 }
 
-// TestStatusesMatchSchema checks statuses against the newest status CHECK in the migrations, so the
+func TestStatusesGivesANewSliceEachTime(t *testing.T) {
+	s := order.Statuses()
+	s[0] = "changed"
+	assert.Equal(t, order.Pending, order.Statuses()[0])
+}
+
+// TestStatusesMatchSchema checks Statuses against the newest status CHECK in the migrations, so the
 // database accepts every status and nothing else.
 func TestStatusesMatchSchema(t *testing.T) {
 	files, err := fs.Glob(migrations.FS, "*.up.sql")
@@ -132,5 +133,5 @@ func TestStatusesMatchSchema(t *testing.T) {
 	for v := range strings.SplitSeq(values, ",") {
 		schema = append(schema, order.Status(strings.Trim(strings.TrimSpace(v), "'")))
 	}
-	assert.ElementsMatch(t, statuses, schema)
+	assert.ElementsMatch(t, order.Statuses(), schema)
 }

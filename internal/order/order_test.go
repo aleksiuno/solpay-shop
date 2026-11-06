@@ -43,7 +43,7 @@ func TestPayable(t *testing.T) {
 	deadline := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	// takes lists the statuses that take payments, written out here.
 	takes := map[order.Status]bool{order.Pending: true, order.Underpaid: true}
-	for _, s := range statuses {
+	for _, s := range order.Statuses() {
 		o := order.Order{Status: s, ExpiresAt: deadline}
 		assert.Equal(t, takes[s], o.Payable(deadline.Add(-time.Minute)), "%s before the deadline", s)
 		assert.Equal(t, takes[s], o.Payable(deadline), "%s at the deadline", s)

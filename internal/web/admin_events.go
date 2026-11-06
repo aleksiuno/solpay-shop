@@ -11,12 +11,9 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/audit"
 )
 
-// levels are the event levels, in the order the admin's filter offers them.
-var levels = []audit.Level{audit.Info, audit.Warn, audit.Error}
-
 // eventPage is what the admin's event log shows: one page of events, the filter, the links to
 // the newest page and to the next older one, each "" when there is none, and what was wrong with
-// the filter.
+// the filter. The filter offers Levels in their order.
 type eventPage struct {
 	Events  []audit.Event
 	OrderID string // the filter's order id, or ""
@@ -33,7 +30,7 @@ type eventPage struct {
 // when given. A filter that names none of these shows the page with the problem: 400.
 func (s site) adminEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	p := eventPage{OrderID: strings.TrimSpace(q.Get("order_id")), Level: audit.Level(q.Get("level")), Levels: levels, PerPage: audit.PageSize}
+	p := eventPage{OrderID: strings.TrimSpace(q.Get("order_id")), Level: audit.Level(q.Get("level")), Levels: audit.Levels(), PerPage: audit.PageSize}
 	f := audit.ListFilter{Level: p.Level}
 	if p.OrderID != "" {
 		id, err := uuid.Parse(p.OrderID)
@@ -43,7 +40,7 @@ func (s site) adminEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		f.OrderID, p.OrderID = &id, id.String()
 	}
-	if f.Level != "" && !slices.Contains(levels, f.Level) {
+	if f.Level != "" && !slices.Contains(p.Levels, f.Level) {
 		s.refuseFilter(w, r, p, "There is no such level.")
 		return
 	}

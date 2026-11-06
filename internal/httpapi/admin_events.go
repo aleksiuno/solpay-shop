@@ -9,9 +9,6 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/audit"
 )
 
-// eventLevels are the levels that ?level= may name.
-var eventLevels = []audit.Level{audit.Info, audit.Warn, audit.Error}
-
 // listAdminEvents answers with a page of events, the newest first: those older than the event
 // that ?before= names, of the order that ?order_id= names and at the level that ?level= names,
 // each when given. {"events": [...], "next_before": 123}: next_before is the last event's id
@@ -28,8 +25,8 @@ func (a api) listAdminEvents(w http.ResponseWriter, r *http.Request) {
 		f.OrderID = &id
 	}
 	f.Level = audit.Level(q.Get("level"))
-	if f.Level != "" && !slices.Contains(eventLevels, f.Level) {
-		writeError(w, http.StatusBadRequest, codeInvalidRequest, "level must be one of info, warn, error")
+	if levels := audit.Levels(); f.Level != "" && !slices.Contains(levels, f.Level) {
+		writeError(w, http.StatusBadRequest, codeInvalidRequest, "level must be one of "+oneOf(levels))
 		return
 	}
 	if v := q.Get("before"); v != "" {
