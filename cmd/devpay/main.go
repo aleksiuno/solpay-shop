@@ -9,6 +9,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,17 +46,20 @@ const (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
 // run parses the command line and returns the exit code: 0 on success, 1 on failure and 2 on a
-// usage error. Results go to stdout (an address or a signature) and messages to stderr.
-func run(args []string, stdout, stderr io.Writer) int {
+// usage error. It reads the environment through getenv, normally os.Getenv. Results go to stdout
+// (an address or a signature) and messages to stderr.
+func run(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("devpay", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	keypair := fs.String("keypair", "", "solana-keygen `file` of the wallet that pays")
 	newKeypair := fs.String("new-keypair", "", "create a keypair `file` (mode 0600), print its address and exit")
-	rpcURL := fs.String("rpc", solana.DevnetRPCURL, "devnet JSON-RPC `URL`")
+	// The default stays empty: the usage text prints a flag's default, and the environment's URL
+	// may hold a key.
+	rpcURL := fs.String("rpc", "", "devnet JSON-RPC `URL` (default $SOLANA_RPC_URL, else "+solana.DevnetRPCURL+")")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage:
   devpay -new-keypair FILE
@@ -64,6 +68,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 devpay pays a Solana Pay transfer-request URL on devnet, with the URL's
 references attached so the shop can detect the payment. Quote the URL: it
 contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
+
+Without -rpc, devpay uses $SOLANA_RPC_URL, else the public devnet endpoint.
+A keyed URL holds its API key: on the command line, other local users can
+see it and the shell keeps it in its history. To use the one in .env:
+  (set -a; . ./.env; devpay -keypair FILE 'solana:...')
 
 `)
 		fs.PrintDefaults()
@@ -97,12 +106,16 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 	if *keypair == "" {
 		return usageError(stderr, "-keypair is required: the wallet that pays")
 	}
+	raw, from := *rpcURL, "-rpc"
+	if raw == "" {
+		raw, from = cmp.Or(getenv("SOLANA_RPC_URL"), solana.DevnetRPCURL), "SOLANA_RPC_URL"
+	}
 	// A keyed endpoint carries its API key in the URL's path, query or userinfo, so devpay names it
 	// only as scheme://host: the endpoint's HTTP client rewrites the URL in net/http's errors, and
 	// msgs redacts it in solana-go's.
-	ep, err := solana.ParseEndpoint(*rpcURL)
+	ep, err := solana.ParseEndpoint(raw)
 	if err != nil {
-		return usageError(stderr, "-rpc wants an https URL, or http to a loopback host")
+		return usageError(stderr, from+" wants an https URL, or http to a loopback host")
 	}
 	msgs := redacting{stderr, ep}
 	req, err := solanapay.Parse(fs.Arg(0))
@@ -121,7 +134,7 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 	context.AfterFunc(ctx, stop) // after the first signal, a second one kills devpay
 	ctx, cancel := context.WithTimeout(ctx, payTimeout)
 	defer cancel()
-	client := rpc.NewWithCustomRPCClient(jsonrpc.NewClientWithOpts(*rpcURL, &jsonrpc.RPCClientOpts{HTTPClient: ep.HTTPClient(rpcTimeout)}))
+	client := rpc.NewWithCustomRPCClient(jsonrpc.NewClientWithOpts(raw, &jsonrpc.RPCClientOpts{HTTPClient: ep.HTTPClient(rpcTimeout)}))
 	sig, err := pay(ctx, client, key, req, msgs)
 	if err != nil {
 		fmt.Fprintf(msgs, "devpay: %v\n", err)
