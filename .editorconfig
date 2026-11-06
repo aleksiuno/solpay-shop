@@ -6,7 +6,9 @@ insert_final_newline = true
 trim_trailing_whitespace = true
 indent_style = space
 indent_size = 2
-[{*.go,Makefile}]
+[{*.go,go.mod,Makefile}]
 indent_style = tab
+[*.sql]
+indent_size = unset
 [*.md]
 trim_trailing_whitespace = false
