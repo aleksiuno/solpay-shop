@@ -41,7 +41,7 @@ type adminOrder struct {
 
 // newAdminOrder flags o at now: a payment after the deadline, more received than the amount, or
 // too little, with the window closed once past the deadline.
-func newAdminOrder(o order.Order, now func() time.Time) adminOrder {
+func newAdminOrder(o order.Order, now time.Time) adminOrder {
 	a := adminOrder{Order: o}
 	if o.HasLatePayment {
 		a.Flags = append(a.Flags, "late payment")
@@ -51,7 +51,7 @@ func newAdminOrder(o order.Order, now func() time.Time) adminOrder {
 	}
 	if o.Status == order.Underpaid {
 		a.Flags = append(a.Flags, "underpaid")
-		if !o.OnTime(now()) {
+		if !o.OnTime(now) {
 			a.Flags = append(a.Flags, "window closed")
 		}
 	}
@@ -78,8 +78,10 @@ func (s site) adminOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	list := orderList{Status: status, Statuses: statuses}
+	// The clock is read once, so that every row is flagged at the same instant.
+	now := s.Now()
 	for _, o := range orders {
-		list.Orders = append(list.Orders, newAdminOrder(o, s.Now))
+		list.Orders = append(list.Orders, newAdminOrder(o, now))
 	}
 	s.render(w, r, http.StatusOK, "admin_orders.html", view{Title: "Orders", Data: list})
 }
@@ -150,7 +152,7 @@ func (s site) showOrder(w http.ResponseWriter, r *http.Request, status int, id u
 		s.fail(w, r, err)
 		return
 	}
-	d := orderDetail{adminOrder: newAdminOrder(o, s.Now), Note: note, Problem: problem}
+	d := orderDetail{adminOrder: newAdminOrder(o, s.Now()), Note: note, Problem: problem}
 	// The form is offered where the order may be refunded as it stands; the service checks again,
 	// under the store's lock, when the form is sent.
 	d.Refundable = o.CheckRefund() == nil
