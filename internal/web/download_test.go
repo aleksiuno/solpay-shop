@@ -81,7 +81,7 @@ func TestDownloadSendsTheFileAsAnAttachment(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "the checklist", w.Body.String())
 	assert.Equal(t, "attachment; filename=go-payments-checklist.md", w.Header().Get("Content-Disposition"))
-	assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 	assert.Equal(t, "Thu, 01 Oct 2026 09:30:00 GMT", w.Header().Get("Last-Modified"))
 	assert.Equal(t, []call{{orderID, "1793534400", "c2lnbmF0dXJl", true}}, d.calls, "a GET fulfils")
 	assert.True(t, d.content.closed)
@@ -155,7 +155,7 @@ func TestDownloadRefusals(t *testing.T) {
 			assert.Equal(t, tt.status, w.Code)
 			assert.Equal(t, tt.body+"\n", w.Body.String(), "no error text, no file name")
 			assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
-			assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"))
+			assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 			assert.Empty(t, w.Header().Get("Content-Disposition"))
 			if tt.logged == "" {
 				assert.Empty(t, buf.String())
@@ -182,7 +182,7 @@ func TestDownloadRefusesAPathThatIsNotAnOrderID(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, w.Code, id)
 		assert.Equal(t, "invalid download link\n", w.Body.String(), id)
-		assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"), id)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"), id)
 		assert.Empty(t, d.calls, id)
 	}
 }

@@ -26,7 +26,7 @@ const downloadTimeout = 10 * time.Minute
 // names the files directory or the name the file is stored under. No cache may keep an answer,
 // since the link is the customer's key to the file.
 func (s site) download(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Cache-Control", "no-store")
 	// The shop signs only order ids in their canonical form, as uuid.UUID.String writes them.
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil || id.String() != r.PathValue("id") {

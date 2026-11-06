@@ -214,7 +214,7 @@ func TestForgedDownloadLinksAreRefused(t *testing.T) {
 		w := request(h, method, "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e?exp=1793534400&sig=c2lnbmF0dXJl", crossSite)
 		assert.Equal(t, http.StatusForbidden, w.Code, method)
 		assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), "the download's refusal")
-		assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"), method)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"), method)
 	}
 }
 
