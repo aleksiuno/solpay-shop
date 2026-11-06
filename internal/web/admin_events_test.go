@@ -47,7 +47,7 @@ func TestAdminEventsLog(t *testing.T) {
 	orderCell := `<td><a href="/admin/events?order_id=` + id.String() + `" title="` + id.String() + `"><code>3c9e6f1a</code></a>` +
 		` (<a href="/admin/orders/` + id.String() + `">order</a>)</td>`
 	for _, want := range []string{
-		"<title>Events · solpay-shop</title>",
+		"<title>Events · solpay-shop admin</title>",
 		`<body class="wide">`, // the full width, for the table
 		`<tr class="lvl-error"><td class="time">2026-11-05 12:11:00 UTC</td><td>error</td><td><code>rpc.error</code></td><td></td><td>RPC call failed</td>` +
 			`<td class="long"><code>` + html.EscapeString(`{"error":"a < b & c","method":"getSignaturesForAddress"}`) + `</code></td></tr>`,

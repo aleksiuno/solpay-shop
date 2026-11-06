@@ -51,7 +51,7 @@ func (s site) order(w http.ResponseWriter, r *http.Request) {
 	page, refresh := s.orderPage(o, s.Now())
 	// The page's URL is the customer's only key to the order, so no cache may keep it.
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, http.StatusOK, "order.html", view{Title: "Order", Refresh: refresh, Data: page})
+	s.render(w, r, http.StatusOK, "order.html", view{Title: page.Heading, Refresh: refresh, Data: page})
 }
 
 // orderPage returns the page for o at now, and whether it should reload itself.

@@ -81,7 +81,7 @@ var funcs = template.FuncMap{
 }
 
 // site serves the web routes with its Deps. admin marks the admin's site: its pages carry the
-// navigation bar, and its error pages link back into the admin.
+// navigation bar and an admin title, and its error pages link back into the admin.
 type site struct {
 	Deps
 	admin bool

@@ -6,7 +6,7 @@
 {{- if .Refresh}}
 <meta http-equiv="refresh" content="5">
 {{- end}}
-<title>{{.Title}} · solpay-shop</title>
+<title>{{.Title}} · solpay-shop{{if .Admin}} admin{{end}}</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body{{if .Wide}} class="wide"{{end}}>
