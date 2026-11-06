@@ -2,7 +2,7 @@
 GOLANGCI_VERSION := v2.15.0
 SQLC_VERSION := 1.31.1
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LINT := $(shell command -v golangci-lint 2>/dev/null || echo docker run --rm -v $(CURDIR):/app -w /app golangci/golangci-lint:$(GOLANGCI_VERSION) golangci-lint)
+LINT := $(or $(shell command -v golangci-lint 2>/dev/null),docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$(CURDIR)":/src -w /src golangci/golangci-lint:$(GOLANGCI_VERSION) golangci-lint)
 LOAD_ENV := set -a; [ -f .env ] || { echo "missing .env: run make env" >&2; exit 1; }; . ./.env; set +a
 
 .PHONY: help env up down logs run migrate seed test test-integration lint fmt sqlc tidy
