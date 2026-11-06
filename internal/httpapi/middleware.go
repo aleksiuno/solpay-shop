@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -131,6 +132,25 @@ func (rec *recorder) Write(b []byte) (int, error) {
 	}
 	n, err := rec.ResponseWriter.Write(b)
 	rec.bytes += int64(n)
+	return n, err
+}
+
+// ReadFrom copies src to the underlying writer with io.Copy, which uses that writer's ReadFrom
+// when it has one. A copy such as http.ServeContent's thus reaches the server's writer through
+// every recorder, and a file still goes out by sendfile. As in Write, the response counts as
+// started before the copy, so Recover aborts one that panics part-way. A copy that copies nothing
+// sends no header either, so afterwards the response has not started. The bytes are counted once
+// the copy returns, so a copy that panics is logged with none.
+func (rec *recorder) ReadFrom(src io.Reader) (int64, error) {
+	starts := rec.code == 0
+	if starts {
+		rec.code = http.StatusOK
+	}
+	n, err := io.Copy(rec.ResponseWriter, src)
+	if starts && n == 0 {
+		rec.code = 0
+	}
+	rec.bytes += n
 	return n, err
 }
 
