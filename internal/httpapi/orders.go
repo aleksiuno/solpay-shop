@@ -61,8 +61,7 @@ func (a api) newOrderJSON(o order.Order) orderJSON {
 		t := o.PaidAt.UTC()
 		j.PaidAt = &t
 	}
-	// An order takes payments while it is pending or underpaid, until its deadline.
-	if (o.Status == order.Pending || o.Status == order.Underpaid) && o.OnTime(a.Now()) {
+	if o.Payable(a.Now()) {
 		j.Payment = &paymentJSON{
 			Recipient: a.Merchant,
 			Reference: o.Reference,

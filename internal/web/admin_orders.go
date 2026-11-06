@@ -156,10 +156,9 @@ func (s site) showOrder(w http.ResponseWriter, r *http.Request, status int, id u
 		return
 	}
 	d := orderDetail{adminOrder: newAdminOrder(o, s.Now), Note: note, Problem: problem}
-	// The form is offered where the order service would refund the order as it stands; the
-	// service checks again when the form is sent.
-	d.Refundable = o.Status == order.Underpaid || o.Status == order.Paid || o.Status == order.Fulfilled ||
-		o.Status == order.Expired && o.HasLatePayment
+	// The form is offered where the order may be refunded as it stands; the service checks again,
+	// under the store's lock, when the form is sent.
+	d.Refundable = o.CheckRefund() == nil
 	if d.Payments, err = s.Ledger.Ledger(ctx, id); err != nil {
 		s.fail(w, r, err)
 		return

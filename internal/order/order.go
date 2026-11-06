@@ -47,6 +47,25 @@ func (o Order) OnTime(blockTime time.Time) bool {
 	return !blockTime.After(o.ExpiresAt)
 }
 
+// Payable reports whether o can be paid at now: it is pending or underpaid, and a payment made now
+// would be on time. The customer is shown how to pay an order only while it is payable. Credit does
+// not ask it, because the watcher still credits a payment made on time that it finds after the
+// deadline.
+func (o Order) Payable(now time.Time) bool {
+	return (o.Status == Pending || o.Status == Underpaid) && o.OnTime(now)
+}
+
+// CheckRefund returns nil if o may be refunded as it stands, which it may once it has received
+// something: when it is underpaid, paid or fulfilled, or expired with a late payment. An expired
+// order without a late payment gives ErrNoLatePayment, and any other order an error wrapping
+// ErrInvalidTransition.
+func (o Order) CheckRefund() error {
+	if o.Status == Expired && !o.HasLatePayment {
+		return ErrNoLatePayment
+	}
+	return Transition(o.Status, Refunded)
+}
+
 // Credit works out what an on-time payment of lamports does to a pending or underpaid order: the
 // status it moves to, and its new received total. The order is paid once the total reaches the
 // amount, and underpaid while the total is short. Credit changes nothing itself.

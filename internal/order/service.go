@@ -145,13 +145,10 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Order, error) {
 // Refund marks the order with id refunded, with an optional note from the admin, and records an
 // order.refunded event with it. The SOL itself is returned outside the shop.
 //
-// An order can be refunded once it has received something: when it is underpaid, paid or
-// fulfilled, or expired with a late payment. Any other order gives an error wrapping
-// ErrInvalidTransition, an expired order without a late payment gives ErrNoLatePayment, and an
-// unknown id gives ErrNotFound. The note's CRLF line breaks become LF, and it is trimmed of
-// surrounding white space first; a note that
-// is then longer than 500 characters, or has a NUL or a byte that is not UTF-8, gives a
-// *ValidationError.
+// Refund checks the order with CheckRefund as the store holds it under its lock, and returns any
+// error CheckRefund gives; an unknown id gives ErrNotFound. The note's CRLF line breaks become LF,
+// and it is trimmed of surrounding white space first; a note that is then longer than 500
+// characters, or has a NUL or a byte that is not UTF-8, gives a *ValidationError.
 func (s *Service) Refund(ctx context.Context, id uuid.UUID, note string) (Order, error) {
 	// A browser sends a text area's line breaks as CRLF, but counts each as one character.
 	note = strings.TrimSpace(strings.ReplaceAll(note, "\r\n", "\n"))
@@ -162,10 +159,7 @@ func (s *Service) Refund(ctx context.Context, id uuid.UUID, note string) (Order,
 		return Order{}, &ValidationError{"note", fmt.Sprintf("is longer than %d characters", MaxNoteLength)}
 	}
 	return s.repo.Refund(ctx, id, s.now(), func(o Order) ([]audit.Event, error) {
-		if o.Status == Expired && !o.HasLatePayment {
-			return nil, ErrNoLatePayment
-		}
-		if err := Transition(o.Status, Refunded); err != nil {
+		if err := o.CheckRefund(); err != nil {
 			return nil, err
 		}
 		data := map[string]any{"from_status": string(o.Status), "received_lamports": o.ReceivedLamports}
