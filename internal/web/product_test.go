@@ -24,6 +24,22 @@ func TestProductPage(t *testing.T) {
 	assert.Contains(t, body, "<title>Go payments checklist · solpay-shop</title>")
 }
 
+// The line breaks typed into a description show on the home page and the product's page, as the
+// style sheet keeps them.
+func TestDescriptionKeepsItsLineBreaks(t *testing.T) {
+	p := checklist
+	p.Description = "First paragraph.\nSecond line.\n\nThird paragraph."
+	mux, _ := newSite(web.Deps{Products: &catalogue{products: []product.Product{p}}})
+	for _, path := range []string{"/", "/p/go-payments-checklist"} {
+		body := requirePage(t, get(mux, path), http.StatusOK)
+		assert.Contains(t, body, `<p class="description">First paragraph.
+Second line.
+
+Third paragraph.</p>`, path)
+	}
+	assert.Contains(t, get(mux, "/static/style.css").Body.String(), ".description { white-space: pre-line; }")
+}
+
 func TestProductNoLongerForSale(t *testing.T) {
 	body := requirePage(t, get(newCatalogue(), "/p/old-notes"), http.StatusOK)
 	assert.Contains(t, body, `<p class="notice">This product is no longer for sale.</p>`)

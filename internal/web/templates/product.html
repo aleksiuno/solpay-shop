@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>{{.Product.Title}}</h1>
-<p>{{.Product.Description}}</p>
+<p class="description">{{.Product.Description}}</p>
 <p class="price">{{sol .Product.PriceLamports}} SOL per licence</p>
 {{if .Product.Active}}
 {{with .Problem}}<p class="problem" role="alert">{{.}}</p>{{end}}
