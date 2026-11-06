@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -38,6 +39,11 @@ func testKey(label string) sol.PrivateKey {
 }
 
 func addr(label string) string { return testKey(label).PublicKey().String() }
+
+// getenv returns an environment that holds env only, so no test reads the real one.
+func getenv(env map[string]string) func(string) string {
+	return func(key string) string { return env[key] }
+}
 
 // request parses the URL a shop would show, so the tests cover the whole path from URL to
 // transaction.
@@ -410,7 +416,7 @@ func TestConfirm(t *testing.T) {
 					return tt.heights[next("height", len(tt.heights))]
 				},
 			})
-			ctx, cancel := context.WithTimeout(t.Context(), cmp(tt.timeout, 5*time.Second))
+			ctx, cancel := context.WithTimeout(t.Context(), cmp.Or(tt.timeout, 5*time.Second))
 			defer cancel()
 
 			err := confirm(ctx, client, sol.Signature{1}, lastValid, time.Millisecond, io.Discard)
@@ -429,14 +435,6 @@ func TestConfirm(t *testing.T) {
 			}
 		})
 	}
-}
-
-// cmp returns d, or def if d is zero.
-func cmp(d, def time.Duration) time.Duration {
-	if d == 0 {
-		return def
-	}
-	return d
 }
 
 func TestConfirmRetriesFailedChecks(t *testing.T) {
@@ -472,7 +470,7 @@ func TestRunFollowsNoRedirect(t *testing.T) {
 	t.Cleanup(named.Close)
 
 	var stdout, stderr bytes.Buffer
-	assert.Equal(t, 1, run([]string{"-keypair", keypair, "-rpc", named.URL, order(t).URL()}, &stdout, &stderr))
+	assert.Equal(t, 1, run([]string{"-keypair", keypair, "-rpc", named.URL, order(t).URL()}, getenv(nil), &stdout, &stderr))
 	assert.Empty(t, other.called(), "no call reaches the node the redirect names")
 	assert.Nil(t, sent.get())
 }
@@ -498,7 +496,7 @@ func TestRunUsage(t *testing.T) {
 	}
 	for name, tt := range tests {
 		var stdout, stderr bytes.Buffer
-		code := run(tt.args, &stdout, &stderr)
+		code := run(tt.args, getenv(nil), &stdout, &stderr)
 		assert.Equal(t, tt.code, code, name)
 		assert.Contains(t, stderr.String(), tt.want, name)
 		assert.NotContains(t, stderr.String(), "SECRET", name)
@@ -509,7 +507,7 @@ func TestRunUsage(t *testing.T) {
 func TestRunNewKeypair(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "merchant.json")
 	var stdout, stderr bytes.Buffer
-	require.Equal(t, 0, run([]string{"-new-keypair", path}, &stdout, &stderr), stderr.String())
+	require.Equal(t, 0, run([]string{"-new-keypair", path}, getenv(nil), &stdout, &stderr), stderr.String())
 
 	key, err := sol.PrivateKeyFromSolanaKeygenFile(path)
 	require.NoError(t, err)
@@ -527,7 +525,7 @@ func TestRunPays(t *testing.T) {
 	f, _ := newFakeRPC(t, handlers)
 	var stdout, stderr bytes.Buffer
 	keyed := f.url + "/v2/key-SECRET?api-key=SECRET"
-	require.Equal(t, 0, run([]string{"-keypair", keypair, "-rpc", keyed, order(t).URL()}, &stdout, &stderr), stderr.String())
+	require.Equal(t, 0, run([]string{"-keypair", keypair, "-rpc", keyed, order(t).URL()}, getenv(nil), &stdout, &stderr), stderr.String())
 	require.NotNil(t, sent.get())
 	assert.Equal(t, sent.get().Signatures[0].String()+"\n", stdout.String(), "stdout is the signature alone")
 	assert.Contains(t, stderr.String(), "Confirmed.")
@@ -537,9 +535,36 @@ func TestRunPays(t *testing.T) {
 	handlers["getGenesisHash"] = func([]json.RawMessage) any { return addr("another cluster") }
 	stdout.Reset()
 	stderr.Reset()
-	require.Equal(t, 1, run([]string{"-keypair", keypair, "-rpc", f.url, order(t).URL()}, &stdout, &stderr))
+	require.Equal(t, 1, run([]string{"-keypair", keypair, "-rpc", f.url, order(t).URL()}, getenv(nil), &stdout, &stderr))
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "not on devnet")
+}
+
+func TestRunTakesTheRPCURLFromTheEnvironment(t *testing.T) {
+	keypair := filepath.Join(t.TempDir(), "payer.json")
+	_, err := writeKeypair(keypair)
+	require.NoError(t, err)
+	handlers, sent := devnet(t, 2_000_000)
+	f, _ := newFakeRPC(t, handlers)
+	// devpay refuses plain http to a remote host, so a run that uses this URL stops at once.
+	keyed := getenv(map[string]string{"SOLANA_RPC_URL": "http://user:pw-SECRET@rpc.example/key-SECRET"})
+
+	var stdout, stderr bytes.Buffer
+	require.Equal(t, 0, run([]string{"-keypair", keypair, order(t).URL()}, getenv(map[string]string{"SOLANA_RPC_URL": f.url}), &stdout, &stderr), stderr.String())
+	require.NotNil(t, sent.get(), "without -rpc, devpay pays through SOLANA_RPC_URL")
+
+	stderr.Reset()
+	require.Equal(t, 0, run([]string{"-keypair", keypair, "-rpc", f.url, order(t).URL()}, keyed, &stdout, &stderr), "-rpc comes first: %s", stderr.String())
+
+	stderr.Reset()
+	assert.Equal(t, 2, run([]string{"-keypair", keypair, order(t).URL()}, keyed, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), "SOLANA_RPC_URL wants an https URL")
+	assert.NotContains(t, stderr.String(), "SECRET")
+
+	stderr.Reset()
+	assert.Equal(t, 0, run([]string{"-h"}, keyed, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), "(default $SOLANA_RPC_URL, else "+solana.DevnetRPCURL+")")
+	assert.NotContains(t, stderr.String(), "SECRET", "the usage text never shows the environment's URL")
 }
 
 func TestRunHidesTheRPCKey(t *testing.T) {
@@ -564,7 +589,7 @@ func TestRunHidesTheRPCKey(t *testing.T) {
 		redirect.URL + "/key-SECRET?api-key=SECRET",
 	} {
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"-keypair", keypair, "-rpc", endpoint, order(t).URL()}, &stdout, &stderr)
+		code := run([]string{"-keypair", keypair, "-rpc", endpoint, order(t).URL()}, getenv(nil), &stdout, &stderr)
 		assert.Equal(t, 1, code, endpoint)
 		assert.Contains(t, stderr.String(), "http://127.0.0.1:", endpoint)
 		assert.NotContains(t, stderr.String(), "SECRET", endpoint)
