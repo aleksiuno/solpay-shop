@@ -3,6 +3,8 @@ package web_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -174,4 +176,34 @@ func TestStaticStyles(t *testing.T) {
 	for _, path := range []string{"/static/missing.css", "/static/", "/static/..%2ftemplates%2fbase.html"} {
 		assert.Equal(t, http.StatusNotFound, get(mux, path).Code, path)
 	}
+}
+
+// A browser that has the style sheet asks for it by its ETag on every page, and gets a 304 without
+// the sheet while it is the same. The tag is made from the sheet's bytes: a fixed one would answer
+// 304 to a copy of the sheet from before a deploy, and the browser would keep it.
+func TestStaticStylesAreRevalidatedByTheirTag(t *testing.T) {
+	mux, _ := newSite(web.Deps{})
+	w := get(mux, "/static/style.css")
+	require.Equal(t, http.StatusOK, w.Code)
+	sum := sha256.Sum256(w.Body.Bytes())
+	tag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	sent := w.Result().Header // as written with the status, not as set later
+	assert.Equal(t, tag, sent.Get("ETag"), "a strong tag made from the sheet")
+	assert.Equal(t, "no-cache", sent.Get("Cache-Control"))
+
+	ask := func(ifNoneMatch string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/static/style.css", nil)
+		r.Header.Set("If-None-Match", ifNoneMatch)
+		return serve(mux, r)
+	}
+	w = ask(tag)
+	assert.Equal(t, http.StatusNotModified, w.Code)
+	assert.Empty(t, w.Body.String())
+	sent = w.Result().Header
+	assert.Equal(t, tag, sent.Get("ETag"))
+	assert.Equal(t, "no-cache", sent.Get("Cache-Control"))
+
+	w = ask(`"an-older-sheet"`)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "font")
 }
