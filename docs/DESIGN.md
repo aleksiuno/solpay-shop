@@ -52,7 +52,9 @@ live in `internal/solana/solanatest`, outside production code.
   `.env`: `make env` generates the secrets, and compose refuses to start without them.
 - The admin pages and the admin API share one basic auth check. A browser resends those
   credentials on its own, so Go's `http.CrossOriginProtection` refuses a cross-site request with an
-  unsafe method, which needs no CSRF tokens, and admin answers carry `X-Frame-Options: DENY`.
+  unsafe method, which needs no CSRF tokens, and admin answers carry `X-Frame-Options: DENY`. They
+  also carry `Cache-Control: no-store`, as the customer's order answers do: the order and event
+  answers list order ids, and an order id is the key to its order.
 
 ## Order state machine
 
