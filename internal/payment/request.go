@@ -15,10 +15,9 @@ const label = "solpay-shop (devnet)"
 // to merchant, with the order's reference attached. The message names the product, and the number
 // of licences when there is more than one.
 //
-// It is meant for an order that can still be paid: pending or underpaid, and not past its
-// deadline. Request checks neither, so the caller must. Such an order always has a positive
-// remaining amount; for one that has received its amount, the request would name no amount, and
-// the wallet would ask the customer for one.
+// It is meant for an order that is payable now, as Order.Payable says. Request does not check, so
+// the caller must. Such an order always has a positive remaining amount; for one that has received
+// its amount, the request would name no amount, and the wallet would ask the customer for one.
 func Request(o order.Order, merchant string) solanapay.Request {
 	msg := o.ProductTitle
 	if o.Quantity > 1 {

@@ -63,7 +63,7 @@ func (s site) order(w http.ResponseWriter, r *http.Request) {
 // a reload.
 func (s site) orderPage(o order.Order, now time.Time) (orderPage, bool) {
 	p := orderPage{Order: o}
-	closed := now.After(o.ExpiresAt)
+	closed := !o.OnTime(now)
 	switch o.Status {
 	case order.Pending, order.Underpaid:
 		switch {

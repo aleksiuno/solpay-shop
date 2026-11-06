@@ -29,7 +29,7 @@ func (s site) orderQR(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if (o.Status != order.Pending && o.Status != order.Underpaid) || !o.OnTime(s.Now()) {
+	if !o.Payable(s.Now()) {
 		s.problem(w, r, http.StatusNotFound, "Not found", "This order cannot be paid now.")
 		return
 	}

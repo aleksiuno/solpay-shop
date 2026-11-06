@@ -39,6 +39,39 @@ func TestOnTime(t *testing.T) {
 	assert.False(t, o.OnTime(deadline.Add(time.Second)))
 }
 
+func TestPayable(t *testing.T) {
+	deadline := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	// takes lists the statuses that take payments, written out here.
+	takes := map[order.Status]bool{order.Pending: true, order.Underpaid: true}
+	for _, s := range statuses {
+		o := order.Order{Status: s, ExpiresAt: deadline}
+		assert.Equal(t, takes[s], o.Payable(deadline.Add(-time.Minute)), "%s before the deadline", s)
+		assert.Equal(t, takes[s], o.Payable(deadline), "%s at the deadline", s)
+		assert.False(t, o.Payable(deadline.Add(time.Nanosecond)), "%s after the deadline", s)
+	}
+}
+
+// An order may be refunded once it has received something: on time or, for an expired one, late.
+func TestCheckRefund(t *testing.T) {
+	for _, s := range []order.Status{order.Underpaid, order.Paid, order.Fulfilled} {
+		require.NoError(t, order.Order{Status: s}.CheckRefund(), s)
+	}
+	for _, o := range []order.Order{
+		{Status: order.Pending}, {Status: order.Pending, HasLatePayment: true},
+		{Status: order.Refunded}, {Status: order.Refunded, HasLatePayment: true},
+		{Status: "cancelled"},
+	} {
+		err := o.CheckRefund()
+		require.ErrorIs(t, err, order.ErrInvalidTransition, "%s, late payment %t", o.Status, o.HasLatePayment)
+		require.NotErrorIs(t, err, order.ErrNoLatePayment, "%s, late payment %t", o.Status, o.HasLatePayment)
+	}
+
+	expired := order.Order{Status: order.Expired}
+	require.ErrorIs(t, expired.CheckRefund(), order.ErrNoLatePayment)
+	expired.HasLatePayment = true
+	require.NoError(t, expired.CheckRefund(), "a late payment makes an expired order refundable")
+}
+
 func TestCredit(t *testing.T) {
 	tests := []struct {
 		name         string
