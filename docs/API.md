@@ -188,7 +188,7 @@ expiry must be written as the shop writes them: an id in upper case, or an expir
 zero, is refused too.
 
 The file comes as an attachment named after the product's slug, such as
-`go-payments-checklist.md`, with `Cache-Control: private, no-store`. `Range` requests work, so a
+`go-payments-checklist.md`, with `Cache-Control: no-store`. `Range` requests work, so a
 download can resume while its link does. curl does not combine `-C -` with `-J`, so name the file
 to resume:
 
