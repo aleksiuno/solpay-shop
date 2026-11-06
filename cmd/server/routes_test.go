@@ -128,13 +128,15 @@ func TestAdminRoutesNeedCredentials(t *testing.T) {
 	}
 }
 
-// The admin routes' answers, with or without credentials, forbid framing by another site.
-func TestAdminRoutesForbidFraming(t *testing.T) {
+// The admin routes' answers, with or without credentials, forbid framing by another site, and no
+// cache may keep them.
+func TestAdminRoutesForbidFramingAndCaching(t *testing.T) {
 	h := newRouter()
 	for _, prepare := range [][]func(*http.Request){nil, {withAuth(adminUser, adminPass)}} {
 		for _, path := range []string{"/admin/no-such-page", "/api/v1/admin/no-such-endpoint"} {
-			w := request(h, http.MethodGet, path, prepare...)
-			assert.Equal(t, "DENY", w.Result().Header.Get("X-Frame-Options"), path)
+			sent := request(h, http.MethodGet, path, prepare...).Result().Header
+			assert.Equal(t, "DENY", sent.Get("X-Frame-Options"), path)
+			assert.Equal(t, "no-store", sent.Get("Cache-Control"), path)
 		}
 	}
 }
@@ -165,6 +167,7 @@ func TestAdminRoutesAreMounted(t *testing.T) {
 		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, tt.path)
 		assert.Equal(t, tt.allow, w.Header().Get("Allow"), tt.path)
 		assert.Equal(t, "DENY", w.Result().Header.Get("X-Frame-Options"), tt.path)
+		assert.Equal(t, "no-store", w.Result().Header.Get("Cache-Control"), tt.path)
 	}
 }
 

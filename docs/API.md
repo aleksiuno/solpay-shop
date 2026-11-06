@@ -20,7 +20,9 @@ leave out `http://`.
   `request_id` on each line about the request. Quote it when you report a problem. An
   `X-Request-ID` sent with the request is ignored.
 - Everything under `/api/v1/admin/` and `/admin/` needs HTTP basic auth with `ADMIN_USER` and
-  `ADMIN_PASS` from `.env`. Without them, or with others, the answer is `401 unauthorized`.
+  `ADMIN_PASS` from `.env`. Without them, or with others, the answer is `401 unauthorized`. Admin
+  answers, the `401` included, carry `X-Frame-Options: DENY` and `Cache-Control: no-store`, since
+  the order and event answers list order ids.
 - A browser request from another origin (another scheme, host or port) with an unsafe method
   (`POST`, `PUT`, `PATCH`, `DELETE`) is refused with `403 forbidden`. curl and other clients that
   send no `Sec-Fetch-Site` or `Origin` header are not affected. The API sends no CORS headers, so a
