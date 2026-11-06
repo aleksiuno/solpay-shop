@@ -1,11 +1,14 @@
 .DEFAULT_GOAL := help
+# CI pins the same three tool versions in .github/workflows/ci.yml; change them in both files.
 GOLANGCI_VERSION := v2.15.0
 SQLC_VERSION := 1.31.1
+GOVULNCHECK_VERSION := v1.9.0
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LINT := $(or $(shell command -v golangci-lint 2>/dev/null),docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$(CURDIR)":/src -w /src golangci/golangci-lint:$(GOLANGCI_VERSION) golangci-lint)
+SQLC := docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src sqlc/sqlc:$(SQLC_VERSION)
 LOAD_ENV := set -a; [ -f .env ] || { echo "missing .env: run make env" >&2; exit 1; }; . ./.env; set +a
 
-.PHONY: help env up down logs run migrate seed test test-integration lint fmt sqlc tidy
+.PHONY: help env up down logs run migrate seed test test-integration check lint fmt sqlc tidy
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -47,12 +50,20 @@ migrate: ## Apply pending migrations to the database named in .env (DATABASE_URL
 seed: ## Load the demo products (needs a migrated database; safe to repeat)
 	docker compose run --rm --no-deps seed
 
-test: ## Unit tests with the race detector
-	go test -race ./...
+test: ## Unit tests with the race detector, in random order
+	go test -race -shuffle=on ./...
 
 test-integration: export DOCKER_HOST ?= $(shell docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
 test-integration: ## Unit + Postgres integration tests (needs a running Docker daemon)
-	go test -race -tags=integration -count=1 ./...
+	go test -race -shuffle=on -tags=integration -count=1 ./...
+
+check: ## Run what CI runs except the tests and the Docker build (needs Docker)
+	go mod tidy -diff
+	go vet -tags=integration ./...
+	$(LINT) run
+	$(SQLC) diff
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -test -tags=integration ./...
+	POSTGRES_PASSWORD=ci MERCHANT_ADDRESS=ci ADMIN_USER=ci ADMIN_PASS=ci DOWNLOAD_SECRET=ci docker compose config --quiet
 
 lint: ## Run golangci-lint (local binary, or the pinned Docker image)
 	$(LINT) run
@@ -61,7 +72,7 @@ fmt: ## Format the code with golangci-lint's formatters
 	$(LINT) fmt
 
 sqlc: ## Regenerate internal/db/sqlcdb from the queries and migrations (with Docker)
-	docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src sqlc/sqlc:$(SQLC_VERSION) generate
+	$(SQLC) generate
 
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
