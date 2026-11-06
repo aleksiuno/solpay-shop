@@ -141,6 +141,5 @@ func blockTime(t *sol.UnixTimeSeconds) *time.Time {
 	if t == nil {
 		return nil
 	}
-	utc := t.Time().UTC()
-	return &utc
+	return new(t.Time().UTC())
 }
