@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -296,8 +297,10 @@ func TestRefusesBadArguments(t *testing.T) {
 	_, err = c.Transaction(t.Context(), "not base58!")
 	require.ErrorIs(t, err, solana.ErrPermanent)
 
-	_, err = solana.New("http://user:pw-SECRET@%zz")
-	require.EqualError(t, err, "solana: the RPC endpoint is not a valid URL")
+	for _, bad := range []string{"http://user:pw-SECRET@%zz", "http://rpc.example/key-SECRET"} {
+		_, err = solana.New(bad)
+		require.EqualError(t, err, "solana: the RPC endpoint must be an https URL, or http to a loopback host", bad)
+	}
 }
 
 func TestKeyedEndpointIsHidden(t *testing.T) {
@@ -347,12 +350,27 @@ func TestKeyedEndpointIsHidden(t *testing.T) {
 		for call, do := range calls {
 			c, err := solana.New(endpoint)
 			require.NoError(t, err)
+			assert.NotContains(t, fmt.Sprintf("%v %+v", c, c), "SECRET", "a printed client shows no key: %s", endpoint)
 			err = do(t.Context(), c)
 			require.Error(t, err, call)
 			assert.NotContains(t, err.Error(), "SECRET", "%s %s", call, endpoint)
 			assert.Contains(t, err.Error(), "http://127.0.0.1", "%s %s", call, endpoint)
 		}
 	}
+}
+
+func TestKeyedEndpointGetsTheWholeURL(t *testing.T) {
+	// Only the client's errors shorten the URL to scheme://host; every call carries the key.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, _ := r.BasicAuth()
+		assert.Equal(t, "user:pw-SECRET", user+":"+pass)
+		assert.Equal(t, "/v2/key-SECRET?api-key=SECRET", r.URL.RequestURI())
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":"`+solana.DevnetGenesisHash+`"}`)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := solana.New(strings.Replace(srv.URL, "http://", "http://user:pw-SECRET@", 1) + "/v2/key-SECRET?api-key=SECRET")
+	require.NoError(t, err)
+	require.NoError(t, c.CheckDevnet(t.Context()))
 }
 
 func TestFollowsNoRedirect(t *testing.T) {
