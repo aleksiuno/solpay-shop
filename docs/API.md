@@ -1,19 +1,26 @@
 # API reference
 
-The shop's JSON API lives under `/api/v1`. On a local run the base URL is `http://localhost:8080`.
+The shop's JSON API lives under `/api/v1`. On a local run the base URL is `http://localhost:8080`,
+or the port that `.env` sets: `APP_PORT` under compose, `APP_ADDR` under `make run`. The examples
+leave out `http://`.
 
 ## Conventions
 
-- Responses are JSON (`Content-Type: application/json`), except `/healthz` and downloads.
+- Responses are JSON (`Content-Type: application/json`), except from `/healthz` and downloads:
+  these answer in plain text, a wrong method on them included, and a download sends the file.
 - A request body is one JSON object of at most 64 KiB. A field the endpoint does not know is
   refused.
-- Amounts are integers in lamports: 1 SOL is 1,000,000,000 lamports. The API never uses
-  fractional SOL.
+- Amounts are integers in lamports: 1 SOL is 1,000,000,000 lamports. SOL appears only in
+  `payment.url`, whose `amount` Solana Pay defines in SOL, such as `amount=0.01`. An order's
+  `amount_lamports` is at most 10,000,000,000,000 (ten licences at the top price), well below
+  2^53, so a JavaScript number holds it exactly.
+- Times are RFC 3339 in UTC. They may carry up to six digits of fractional seconds, such as
+  `2026-11-03T12:00:00.482113Z`, so parse them as RFC 3339 rather than by a fixed pattern.
 - Every response carries an `X-Request-ID` header, a random id that the server also logs as
   `request_id` on each line about the request. Quote it when you report a problem. An
   `X-Request-ID` sent with the request is ignored.
-- Everything under `/api/v1/admin/` needs HTTP basic auth with `ADMIN_USER` and `ADMIN_PASS` from
-  `.env`. Without them, or with others, the answer is `401 unauthorized`.
+- Everything under `/api/v1/admin/` and `/admin/` needs HTTP basic auth with `ADMIN_USER` and
+  `ADMIN_PASS` from `.env`. Without them, or with others, the answer is `401 unauthorized`.
 - A browser request from another origin (another scheme, host or port) with an unsafe method
   (`POST`, `PUT`, `PATCH`, `DELETE`) is refused with `403 forbidden`. curl and other clients that
   send no `Sec-Fetch-Site` or `Origin` header are not affected. The API sends no CORS headers, so a
@@ -33,7 +40,7 @@ change.
 | Code | Status | When |
 |---|---|---|
 | `invalid_request` | 400 | the body is empty, larger than 64 KiB or not one JSON object, or has an unknown field or a value of the wrong type (such as a quantity that is not a whole number), or a query parameter has a value the endpoint does not take |
-| `validation_failed` | 422 | a value is out of range, such as a quantity outside 1 to 10, or a required field is missing |
+| `validation_failed` | 422 | a value breaks the endpoint's rules, such as a quantity outside 1 to 10, a slug in the wrong form or a file that is not in `FILES_DIR`, or a required field is missing; the message starts with the field's name |
 | `not_found` | 404 | no product has the slug or id, no order has the id (or the id is not a UUID), or no endpoint has the path |
 | `method_not_allowed` | 405 | the path exists, but not with this method; the `Allow` header lists the methods it has |
 | `product_inactive` | 409 | an order for a product that is no longer for sale |
@@ -125,10 +132,10 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
     "reference": "<REF>",
     "url": "solana:<MERCHANT>?amount=0.01&reference=<REF>&label=solpay-shop%20%28devnet%29&message=Go%20payments%20checklist%20%282%20licences%29"
   },
-  "expires_at": "2026-11-03T12:15:00Z",
+  "expires_at": "2026-11-03T12:15:00.482113Z",
   "paid_at": null,
   "download_url": null,
-  "created_at": "2026-11-03T12:00:00Z"
+  "created_at": "2026-11-03T12:00:00.482113Z"
 }
 ```
 
@@ -141,9 +148,16 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
 - `payment` says how to pay what remains: the Solana Pay URL, and the recipient and reference it
   names. The payment must list the reference as an extra account, as Solana Pay wallets and devpay
   do; a plain transfer to the recipient is not detected. `payment` is `null` once the order can no
-  longer be paid: in any status other than `pending` and `underpaid`, and after `expires_at`, even
-  while the status is still `pending`.
-- Times are in UTC. `paid_at` is `null` until the order is paid.
+  longer be paid: in any status other than `pending` and `underpaid`, and after `expires_at`.
+- After `expires_at`, a `pending` order has no `payment` block but stays `pending` while the shop
+  makes a final check for payments sent in time. That check takes at least two minutes. It takes
+  longer while the RPC node fails, since only a poll that reads the order's reference can expire
+  it, and up to an hour after `expires_at` while a transaction that lists the reference cannot be
+  read yet. The status then becomes `expired`, or `paid` or `underpaid` if such a payment turns
+  up, so keep polling until it changes. An `underpaid` order never expires: a payment sent in time
+  that the shop finds within an hour of the deadline still counts, and otherwise only a refund
+  changes its status.
+- `paid_at` is `null` until the order is paid.
 - `download_url` is a link to the order's file while the order is `paid` or `fulfilled`, and
   `null` otherwise. It is a path on this server, as in `GET /d/{id}` below. Each read gives a new
   link, which works for 15 minutes.
@@ -170,8 +184,15 @@ zero, is refused too.
 
 The file comes as an attachment named after the product's slug, such as
 `go-payments-checklist.md`, with `Cache-Control: private, no-store`. `Range` requests work, so a
-download can resume while its link does. The first `GET` of a paid order moves it to `fulfilled`;
-`HEAD` checks the link and the file without that.
+download can resume while its link does. curl does not combine `-C -` with `-J`, so name the file
+to resume:
+
+```sh
+curl -fC - -o go-payments-checklist.md 'localhost:8080/d/<ORDER_ID>?exp=<EXP>&sig=<SIG>'
+```
+
+The first `GET` of a paid order moves it to `fulfilled`; `HEAD` checks the link and the file
+without that.
 
 | Status | When |
 |---|---|
@@ -181,8 +202,12 @@ download can resume while its link does. The first `GET` of a paid order moves i
 
 ## Admin endpoints
 
-These need basic auth with `ADMIN_USER` and `ADMIN_PASS`. The admin pages under `/admin/` do the
-same in a browser.
+Every example in this section reads the credentials from the shell, so load `.env` into it first,
+from the repository's root:
+
+```sh
+set -a; . ./.env; set +a
+```
 
 ### `GET /api/v1/admin/products`
 
@@ -208,8 +233,8 @@ curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/products -d '{
   product may have it.
 - `title` is 1 to 120 characters, and `description` at most 2,000; spaces around both are dropped.
 - `price_lamports` is the price of one licence, from 1 to 1,000,000,000,000 (1,000 SOL).
-- `file_name` names a file in `FILES_DIR`. A product not for sale may keep the file it has after
-  the file has gone, so that it can be taken off sale.
+- `file_name` is the bare name of a file in `FILES_DIR`: at most 255 letters, digits, dots, hyphens
+  and underscores, starting with a letter or a digit. The file must be there.
 - `active` says whether the product is for sale.
 
 Every field is required but `description`. Errors: `400 invalid_request`; `422 validation_failed`,
@@ -219,7 +244,18 @@ order above; `409 slug_taken`.
 ### `PUT /api/v1/admin/products/{id}`
 
 Replaces every field of the product with the id, with a body as for `POST`, and answers `200` with
-the product. Errors: as for `POST`, and `404 not_found` for an unknown id or one that is not a UUID.
+the product. A `PUT` that sets `active` to `false` and keeps the product's `file_name` works even
+when that file has gone, so that the product can be taken off sale; naming another file needs that
+file to be there. curl needs `-X PUT`, since `-d` alone sends `POST`.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" -X PUT localhost:8080/api/v1/admin/products/<PRODUCT_ID> -d '{
+  "slug": "go-payments-checklist-team", "title": "Go payments checklist, team licence",
+  "description": "The checklist, for a team.", "price_lamports": 20000000,
+  "file_name": "go-payments-checklist.md", "active": false}'
+```
+
+Errors: as for `POST`, and `404 not_found` for an unknown id or one that is not a UUID.
 
 ### `GET /api/v1/admin/orders`
 
@@ -242,8 +278,8 @@ curl -u "$ADMIN_USER:$ADMIN_PASS" 'localhost:8080/api/v1/admin/orders?status=pai
       "received_lamports": 10000000,
       "reference": "<REF>",
       "has_late_payment": false,
-      "expires_at": "2026-11-03T12:15:00Z",
-      "created_at": "2026-11-03T12:00:00Z",
+      "expires_at": "2026-11-03T12:15:00.482113Z",
+      "created_at": "2026-11-03T12:00:00.482113Z",
       "paid_at": "2026-11-03T12:01:20Z",
       "fulfilled_at": null,
       "refunded_at": null
@@ -252,42 +288,57 @@ curl -u "$ADMIN_USER:$ADMIN_PASS" 'localhost:8080/api/v1/admin/orders?status=pai
 }
 ```
 
-An admin order is what the shop holds, without the payment request and the download link that
-`GET /api/v1/orders/{id}` adds. `has_late_payment` is `true` once a payment reached the order
-after its deadline; such a payment is never credited.
+An admin order is what the shop holds, without the `remaining_lamports`, payment request and
+download link that `GET /api/v1/orders/{id}` adds. `has_late_payment` is `true` once a payment
+with the outcome `late` (see the next endpoint) reached the order; such a payment is never
+credited.
 
 ### `GET /api/v1/admin/orders/{id}`
 
-Gets one order, as in the list, with two more keys: `payments`, what each transaction that
-names the order's reference did for it, by slot, and `events`, what happened to the order, the
-newest first and at most 100.
+Gets one order, as in the list, with two more keys. `payments` lists what each transaction that
+names the order's reference did for it, in slot order. `events` lists what happened to the order,
+the newest first and at most 100.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/orders/<ORDER_ID>
+```
+
+The example keeps only `id` and `status` of the keys the list shows, and only the newest event:
 
 ```json
 {
   "id": "<ORDER_ID>",
   "status": "paid",
   "payments": [
-    {"signature": "<SIG>", "outcome": "credited", "lamports": 10000000, "slot": 4242,
+    {"signature": "<SIGNATURE>", "outcome": "credited", "lamports": 10000000, "slot": 4242,
      "block_time": "2026-11-03T12:01:20Z"}
   ],
   "events": [
     {"id": 7, "order_id": "<ORDER_ID>", "level": "info", "kind": "payment.verified",
-     "message": "order paid", "signature": "<SIG>", "data": {"lamports": 10000000},
-     "created_at": "2026-11-03T12:01:30Z"}
+     "message": "order paid", "signature": "<SIGNATURE>",
+     "data": {"amount_lamports": 10000000, "lamports": 10000000, "received_lamports": 10000000},
+     "created_at": "2026-11-03T12:01:30.913204Z"}
   ]
 }
 ```
 
-A payment's `outcome` is `credited`, `late` (valid, but after the deadline or to an order that
-takes no more) or `rejected`, with a `reason`: `tx_failed`, `no_matching_transfer`,
-`balance_mismatch` or `unfetchable`. `block_time` is `null` when the node gave none. Errors:
-`404 not_found` for an unknown id or one that is not a UUID.
+A payment's `outcome` is `credited`, `late` (a valid payment that does not count: made after the
+deadline, or to an order that is `expired` or `refunded`) or `rejected`, with a `reason`:
+`tx_failed`, `no_matching_transfer`, `balance_mismatch` or `unfetchable`. A rejected payment's
+`lamports` is 0, except for `balance_mismatch`, where it is what the transfers claimed.
+`received_lamports` can pass `amount_lamports`: an on-time payment is credited in full even when it
+is more than what remains, and so is an extra on-time payment found in the same poll as the one
+that paid the order.
+`block_time` is `null` when the node gave none. Errors: `404 not_found` for an unknown id or one
+that is not a UUID.
 
 ### `POST /api/v1/admin/orders/{id}/refund`
 
-Marks the order refunded and answers `200` with it. The shop only records the refund: send the
-SOL back from the merchant wallet yourself. The body is a JSON object with an optional `note` of
-at most 500 characters, which the `order.refunded` event keeps.
+Marks the order refunded and answers `200` with it, as `GET /api/v1/admin/orders` lists it: its
+`status` is `refunded` and `refunded_at` is set. The shop only records the refund: send the SOL
+back from the merchant wallet yourself. The body is a JSON object with an optional `note` of at
+most 500 characters, which the `order.refunded` event keeps. Send `{}` for no note: a request
+without a body is `400 invalid_request`.
 
 ```sh
 curl -u "$ADMIN_USER:$ADMIN_PASS" localhost:8080/api/v1/admin/orders/<ORDER_ID>/refund \
@@ -316,25 +367,54 @@ curl -u "$ADMIN_USER:$ADMIN_PASS" 'localhost:8080/api/v1/admin/events?level=warn
 {
   "events": [
     {"id": 9, "order_id": "<ORDER_ID>", "level": "warn", "kind": "payment.late",
-     "message": "payment does not count towards the order", "signature": "<SIG>",
-     "data": {"block_time": "2026-11-03T12:16:00Z", "expires_at": "2026-11-03T12:15:00Z",
+     "message": "payment does not count towards the order", "signature": "<SIGNATURE>",
+     "data": {"block_time": "2026-11-03T12:16:00Z", "expires_at": "2026-11-03T12:15:00.482113Z",
               "lamports": 10000000, "on_time": false},
-     "created_at": "2026-11-03T12:16:05Z"}
+     "created_at": "2026-11-03T12:16:05.207519Z"}
   ],
   "next_before": null
 }
 ```
 
 An event is as in `GET /api/v1/admin/orders/{id}`. Its `order_id` is `null` when it concerns no
-order, such as a failed RPC call, its `signature` is `""` when it is about no transaction, and its
-`data` is `null` when it has no details. `next_before` is the last event's id when the page is
+order, such as a failed devnet check, its `signature` is `""` when it is about no transaction, and
+its `data` is `null` when it has no details. `next_before` is the last event's id when the page is
 full: pass it as `before`, with the same filters, for the next page. It is `null` on a shorter
 page, which is the last; a full page can be the last too, and then the next one is empty.
 
+Each kind of event has a fixed level. `warn`: `payment.underpaid`, `payment.overpaid`,
+`payment.late`, `payment.invalid_tx` and `rpc.timeout`. `error`: `rpc.error` and `watcher.error`.
+`info`: `order.created`, `order.expired`, `order.refunded`, `payment.seen`, `payment.verified`,
+`payment.duplicate_ignored`, `download.issued`, `watcher.started` and `watcher.stopped`.
+
+## Pages
+
+The shop's HTML pages share the API's host but are not part of it. The pages under `/admin/` need
+the admin credentials.
+
+| Method | Path | What it shows or does |
+|---|---|---|
+| `GET` | `/` | the products for sale |
+| `GET` | `/p/{slug}` | a product, with the checkout form while it is for sale |
+| `POST` | `/checkout` | places an order from the form and answers `303` to the order's page |
+| `GET` | `/orders/{id}` | the order: its QR code and wallet link while it can be paid, its download link once paid |
+| `GET` | `/orders/{id}/qr.png` | a PNG QR code of `payment.url` while the order can be paid; `404` otherwise |
+| `GET` | `/static/style.css` | the style sheet |
+| `GET` | `/admin/` | redirects to `/admin/orders` |
+| `GET` | `/admin/orders` | the newest orders, with the `?status=` filter of the API |
+| `GET` | `/admin/orders/{id}` | an order with its payments, its events and the refund form |
+| `POST` | `/admin/orders/{id}/refund` | refunds the order from the form and answers `303` to its page |
+| `GET` | `/admin/events` | the event log, with the filters of `GET /api/v1/admin/events` |
+| `GET` | `/admin/products` | every product, those no longer for sale included |
+| `GET` | `/admin/products/new` | the form for a new product |
+| `POST` | `/admin/products` | creates a product from the form and answers `303` to the list |
+| `GET` | `/admin/products/{id}/edit` | the form for a product, filled in |
+| `POST` | `/admin/products/{id}` | updates the product from the form and answers `303` to the list |
+
 ## Walkthrough
 
-List the products, place an order and read it back, then pay its URL with devpay
-(see "Paying on devnet" in the README):
+List the products, place an order and read it back, then pay its URL with devpay (see
+[Paying on devnet](../README.md#paying-on-devnet) in the README):
 
 ```sh
 curl localhost:8080/api/v1/products
