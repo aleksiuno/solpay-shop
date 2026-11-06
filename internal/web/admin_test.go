@@ -158,6 +158,39 @@ func send(h http.Handler, path string, form url.Values) *httptest.ResponseRecord
 	return post(h, path, form)
 }
 
+// An admin error page links back to the list of its section; the shop's links to the products
+// for sale.
+func TestAdminErrorsLinkBackToAdmin(t *testing.T) {
+	mux := adminOver(web.Deps{
+		ProductAdmin: &productAdmin{products: []product.Product{checklist}},
+		OrderAdmin:   &orderAdmin{refundErr: order.ErrNotFound}, EventLog: &eventLog{err: errBoom},
+	})
+	tooLong := productForm()
+	tooLong.Set("description", strings.Repeat("x", 70_000))
+	missing := retired.ID.String()
+	tests := []struct {
+		path   string
+		form   url.Values // posted when set
+		status int
+		back   string
+	}{
+		{"/admin/products/" + missing + "/edit", nil, http.StatusNotFound, `<a href="/admin/products">All products</a>`},
+		{"/admin/products/" + missing, productForm(), http.StatusNotFound, `<a href="/admin/products">All products</a>`},
+		{"/admin/products", tooLong, http.StatusBadRequest, `<a href="/admin/products">All products</a>`},
+		{"/admin/orders/" + missing, nil, http.StatusNotFound, `<a href="/admin/orders">All orders</a>`},
+		{"/admin/orders/" + missing + "/refund", url.Values{}, http.StatusNotFound, `<a href="/admin/orders">All orders</a>`},
+		{"/admin/events", nil, http.StatusInternalServerError, `<a href="/admin/events">The event log</a>`},
+	}
+	for _, tt := range tests {
+		body := requirePage(t, send(mux, tt.path, tt.form), tt.status)
+		assert.Contains(t, body, "<p>"+tt.back+"</p>", tt.path)
+		assert.NotContains(t, body, `<a href="/">`, tt.path)
+	}
+
+	shop, _ := newSite(web.Deps{Products: &catalogue{}})
+	assert.Contains(t, requirePage(t, get(shop, "/p/no-such-product"), http.StatusNotFound), `<p><a href="/">All products</a></p>`)
+}
+
 func TestAdminListsEveryProduct(t *testing.T) {
 	a := &productAdmin{products: []product.Product{checklist, retired}}
 	body := requirePage(t, get(newAdmin(a), "/admin/products"), http.StatusOK)
@@ -358,14 +391,21 @@ func TestAdminFormWhenTheFilesCannotBeListed(t *testing.T) {
 	requirePage(t, get(mux, "/admin/products/new"), http.StatusInternalServerError)
 }
 
-// A path under /admin/ that no page has, with any method, gets the error page with its link back.
+// A path under /admin/ that no page has, with any method, gets the error page with its link back
+// to the list of the section the path is in, or to the orders from a path in none.
 func TestAdminUnknownPagesGetTheErrorPage(t *testing.T) {
 	mux := newAdmin(&productAdmin{products: []product.Product{checklist}})
-	for _, path := range []string{"/admin/no-such-page", "/admin/orders/", "/admin/products/new/more"} {
+	back := map[string]string{
+		"/admin/no-such-page":      `<p><a href="/admin/orders">All orders</a></p>`,
+		"/admin/orders/":           `<p><a href="/admin/orders">All orders</a></p>`,
+		"/admin/products/new/more": `<p><a href="/admin/products">All products</a></p>`,
+	}
+	for path, link := range back {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			body := requirePage(t, serve(mux, httptest.NewRequest(method, path, nil)), http.StatusNotFound)
 			assert.Contains(t, body, "There is no such page.", method+" "+path)
-			assert.Contains(t, body, `<a href="/">All products</a>`, method+" "+path)
+			assert.Contains(t, body, link, method+" "+path)
+			assert.NotContains(t, body, `<a href="/">All products</a>`, method+" "+path)
 		}
 	}
 }

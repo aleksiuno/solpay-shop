@@ -80,8 +80,8 @@ var funcs = template.FuncMap{
 	},
 }
 
-// site serves the web routes with its Deps. admin marks the admin's site, whose pages carry the
-// navigation bar.
+// site serves the web routes with its Deps. admin marks the admin's site: its pages carry the
+// navigation bar, and its error pages link back into the admin.
 type site struct {
 	Deps
 	admin bool
@@ -173,9 +173,11 @@ func (s site) render(w http.ResponseWriter, r *http.Request, status int, page st
 	_, _ = buf.WriteTo(w)
 }
 
-// problem is what the error page says.
+// problem is what the error page says, and the link it offers back: in the shop to the products
+// for sale, and in the admin to the list of the page's section, never out to the shop.
 type problem struct {
-	Heading, Message string
+	Heading, Message   string
+	BackHref, BackText string
 }
 
 // fail answers err, which a service returned, with the error page that fits it. An error it does
@@ -200,5 +202,9 @@ func (s site) fail(w http.ResponseWriter, r *http.Request, err error) {
 
 // problem answers with the error page.
 func (s site) problem(w http.ResponseWriter, r *http.Request, status int, heading, message string) {
-	s.render(w, r, status, "error.html", view{Title: heading, Data: problem{heading, message}})
+	p := problem{Heading: heading, Message: message, BackHref: "/", BackText: "All products"}
+	if s.admin {
+		p.BackHref, p.BackText = adminBack(r)
+	}
+	s.render(w, r, status, "error.html", view{Title: heading, Data: p})
 }
