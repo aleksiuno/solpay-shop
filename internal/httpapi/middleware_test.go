@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +58,17 @@ func TestAccessLog(t *testing.T) {
 		{"switching protocols, which no other status follows", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusSwitchingProtocols)
 		}, http.StatusSwitchingProtocols, 0},
+		{"a copy without a status", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.Copy(w, io.LimitReader(strings.NewReader("hello, world"), 5))
+		}, http.StatusOK, 5},
+		{"an empty copy, then a status", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.Copy(w, io.LimitReader(strings.NewReader(""), 0))
+			w.WriteHeader(http.StatusNotFound)
+		}, http.StatusNotFound, 0},
+		{"a status, then an empty copy", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.Copy(w, io.LimitReader(strings.NewReader(""), 0))
+		}, http.StatusAccepted, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,6 +110,58 @@ func TestAccessLogKeepsFlushWorking(t *testing.T) {
 	}))
 	w := serve(h, httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.True(t, w.Flushed)
+}
+
+// readerFrom is a writer with its own ReadFrom, as the server's is. It notes whether a copy
+// reached it.
+type readerFrom struct {
+	*httptest.ResponseRecorder
+	copied bool
+}
+
+func (w *readerFrom) ReadFrom(src io.Reader) (int64, error) {
+	w.copied = true
+	return io.Copy(w.ResponseRecorder, src)
+}
+
+// A copy behind both recorders, as http.ServeContent makes one, reaches the writer's own ReadFrom,
+// which sends a file by sendfile, and the access log still counts it.
+func TestAccessLogKeepsReadFromWorking(t *testing.T) {
+	log, buf := newLogger()
+	h := httpapi.AccessLog(log)(httpapi.Recover(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		_, err := io.Copy(w, io.LimitReader(strings.NewReader("the checklist"), 9))
+		assert.NoError(t, err)
+	})))
+	w := &readerFrom{ResponseRecorder: httptest.NewRecorder()}
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/d/1", nil))
+
+	assert.True(t, w.copied)
+	assert.Equal(t, "the check", w.Body.String())
+	lines := logLines(t, buf)
+	require.Len(t, lines, 1)
+	assert.InDelta(t, http.StatusPartialContent, lines[0]["status"], 0)
+	assert.InDelta(t, 9, lines[0]["bytes"], 0)
+}
+
+// A handler behind both recorders can still set its own deadlines, as the download handler does.
+// Only a real server's writer takes them: a test's recorder refuses every deadline.
+func TestAccessLogAndRecoverPassDeadlinesOn(t *testing.T) {
+	log, _ := newLogger()
+	errs := make(chan error, 2)
+	srv := httptest.NewServer(httpapi.AccessLog(log)(httpapi.Recover(log)(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			rc := http.NewResponseController(w)
+			errs <- rc.SetWriteDeadline(time.Now().Add(time.Minute))
+			errs <- rc.SetReadDeadline(time.Now().Add(time.Minute))
+		}))))
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.NoError(t, <-errs, "write deadline")
+	assert.NoError(t, <-errs, "read deadline")
 }
 
 func TestRecoverAnswersAPanicWithTheInternalEnvelope(t *testing.T) {
@@ -145,6 +210,23 @@ func TestRecoverAnswersARefusedStatusWithTheInternalEnvelope(t *testing.T) {
 	assert.InDelta(t, http.StatusInternalServerError, lines[1]["status"], 0)
 }
 
+// A copy that copies nothing sends nothing, so the response has not started and a panic after it
+// can still be the internal envelope.
+func TestRecoverAnswersAPanicAfterAnEmptyCopyWithTheInternalEnvelope(t *testing.T) {
+	log, buf := newLogger()
+	h := httpapi.AccessLog(log)(httpapi.Recover(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.Copy(w, io.LimitReader(strings.NewReader(""), 0))
+		panic("boom")
+	})))
+	w := serve(h, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	lines := logLines(t, buf)
+	require.Len(t, lines, 2)
+	assert.Equal(t, false, lines[0]["response_started"])
+	assert.InDelta(t, http.StatusInternalServerError, lines[1]["status"], 0)
+}
+
 func TestRecoverAbortsAResponseThatHasStarted(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -154,6 +236,7 @@ func TestRecoverAbortsAResponseThatHasStarted(t *testing.T) {
 		{"a body", func(w http.ResponseWriter) { _, _ = io.WriteString(w, "partial") }, "partial"},
 		{"a status only", func(w http.ResponseWriter) { w.WriteHeader(http.StatusCreated) }, ""},
 		{"a flush", func(w http.ResponseWriter) { _ = http.NewResponseController(w).Flush() }, ""},
+		{"part of a copy", func(w http.ResponseWriter) { _, _ = io.Copy(w, &failingReader{text: "partial"}) }, "partial"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -176,6 +259,18 @@ func TestRecoverAbortsAResponseThatHasStarted(t *testing.T) {
 			assert.Equal(t, "request", lines[1]["msg"], "the aborted request is logged too")
 		})
 	}
+}
+
+// failingReader gives its text and then panics, as a source that fails part-way through a copy.
+type failingReader struct{ text string }
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.text == "" {
+		panic("boom")
+	}
+	n := copy(p, r.text)
+	r.text = r.text[n:]
+	return n, nil
 }
 
 func TestRecoverPassesADeliberateAbortOn(t *testing.T) {

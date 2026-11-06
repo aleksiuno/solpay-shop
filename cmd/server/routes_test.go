@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +21,7 @@ import (
 	"github.com/aleksiuno/solpay-shop/internal/config"
 	"github.com/aleksiuno/solpay-shop/internal/download"
 	"github.com/aleksiuno/solpay-shop/internal/httpapi"
+	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 	"github.com/aleksiuno/solpay-shop/internal/web"
 )
@@ -208,6 +213,44 @@ func TestForgedDownloadLinksAreRefused(t *testing.T) {
 		assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), "the download's refusal")
 		assert.Equal(t, "private, no-store", w.Header().Get("Cache-Control"), method)
 	}
+}
+
+// fileDownloads is a download service whose every link opens the file at path.
+type fileDownloads struct{ path string }
+
+func (fileDownloads) Link(order.Order) (string, bool) { return "", false }
+
+func (d fileDownloads) Open(context.Context, uuid.UUID, string, string, bool) (download.File, error) {
+	f, err := os.Open(d.path)
+	if err != nil {
+		return download.File{}, err
+	}
+	return download.File{Name: "go-payments-checklist.md", Content: f}, nil
+}
+
+// A download through the server's whole handler outlives the write timeout that pages keep: its
+// own deadline reaches the server's writer past every middleware, so one added later that hid the
+// writer would fail this. The client reads nothing until that timeout has passed, by which time
+// the file fills the socket's buffers many times over.
+func TestDownloadsOutliveTheWriteTimeout(t *testing.T) {
+	content := bytes.Repeat([]byte("x"), 16<<20)
+	path := filepath.Join(t.TempDir(), "checklist.md")
+	require.NoError(t, os.WriteFile(path, content, 0o600))
+	log := slog.New(slog.DiscardHandler)
+	srv := httptest.NewUnstartedServer(routes(cfg, log, web.Deps{Downloads: fileDownloads{path}, Log: log},
+		httpapi.Deps{Log: log}))
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL + "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e?exp=1793534400&sig=c2lnbmF0dXJl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	time.Sleep(3 * srv.Config.WriteTimeout)
+	n, err := io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err, "read %d of %d bytes", n, len(content))
+	assert.Equal(t, int64(len(content)), n)
 }
 
 func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
