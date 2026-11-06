@@ -420,6 +420,10 @@ the admin credentials.
 | `GET` | `/admin/products/{id}/edit` | the form for a product, filled in |
 | `POST` | `/admin/products/{id}` | updates the product from the form and answers `303` to the list |
 
+A path outside `/api/v1/` and `/admin/` that no page has gets the shop's error page with `404`. A
+wrong method on a page's path gets `405` in plain text, with an `Allow` header that lists the
+methods the path has.
+
 ## Walkthrough
 
 List the products, place an order and read it back, then pay its URL with devpay (see
