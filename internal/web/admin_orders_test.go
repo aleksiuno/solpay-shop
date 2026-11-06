@@ -122,6 +122,26 @@ func TestAdminOrderList(t *testing.T) {
 </select>`)
 }
 
+// The list reads the clock once, so its rows are flagged at the same instant even when the
+// deadline passes while it is being built.
+func TestAdminOrderListFlagsEveryRowAtOneInstant(t *testing.T) {
+	first, second := pending, pending
+	first.ID, first.Status = uuid.MustParse("11111111-1111-4111-8111-111111111111"), order.Underpaid
+	second.ID, second.Status = uuid.MustParse("22222222-2222-4222-8222-222222222222"), order.Underpaid
+	reads := 0
+	clock := func() time.Time {
+		reads++
+		if reads == 1 {
+			return deadline
+		}
+		return deadline.Add(time.Hour)
+	}
+	mux := adminOver(web.Deps{OrderAdmin: &orderAdmin{orders: []order.Order{first, second}}, Ledger: ledger{}, EventLog: &eventLog{}, Now: clock})
+	body := requirePage(t, get(mux, "/admin/orders"), http.StatusOK)
+	assert.Equal(t, 2, strings.Count(body, `<span class="flag">underpaid</span></td></tr>`))
+	assert.NotContains(t, body, "window closed")
+}
+
 func TestAdminOrderListByStatus(t *testing.T) {
 	for _, s := range order.Statuses() {
 		a := &orderAdmin{}
