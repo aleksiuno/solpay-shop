@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -272,4 +273,38 @@ func TestAdminUpdateAProductThatDoesNotExist(t *testing.T) {
 func TestAdminFormWhenTheFilesCannotBeListed(t *testing.T) {
 	mux := adminOver(web.Deps{ProductAdmin: &productAdmin{}, ProductFiles: fileList{err: errors.New("files directory gone")}})
 	requirePage(t, get(mux, "/admin/products/new"), http.StatusInternalServerError)
+}
+
+// A path under /admin/ that no page has, with any method, gets the error page with its link back.
+func TestAdminUnknownPagesGetTheErrorPage(t *testing.T) {
+	mux := newAdmin(&productAdmin{products: []product.Product{checklist}})
+	for _, path := range []string{"/admin/no-such-page", "/admin/orders/", "/admin/products/new/more"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			body := requirePage(t, serve(mux, httptest.NewRequest(method, path, nil)), http.StatusNotFound)
+			assert.Contains(t, body, "There is no such page.", method+" "+path)
+			assert.Contains(t, body, `<a href="/">All products</a>`, method+" "+path)
+		}
+	}
+}
+
+// A wrong method on an admin page's path gets the plain-text 405 that ServeMux sends, with the
+// methods the path has, and reaches no handler.
+func TestAdminWrongMethodIsNotAllowed(t *testing.T) {
+	a := &productAdmin{products: []product.Product{checklist}}
+	mux := newAdmin(a)
+	tests := []struct{ method, path, allow string }{
+		{http.MethodPost, "/admin/", "GET, HEAD"},
+		{http.MethodDelete, "/admin/products", "GET, HEAD, POST"},
+		{http.MethodPut, "/admin/products/" + checklist.ID.String(), "POST"},
+		{http.MethodPost, "/admin/products/" + checklist.ID.String() + "/edit", "GET, HEAD"},
+		{http.MethodGet, "/admin/orders/" + checklist.ID.String() + "/refund", "POST"},
+	}
+	for _, tt := range tests {
+		w := serve(mux, httptest.NewRequest(tt.method, tt.path, nil))
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, tt.path)
+		assert.Equal(t, tt.allow, w.Header().Get("Allow"), tt.path)
+		assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), tt.path)
+		assert.Equal(t, "Method Not Allowed\n", w.Body.String(), tt.path)
+	}
+	assert.Empty(t, a.saved, "no product was stored")
 }

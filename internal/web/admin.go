@@ -30,7 +30,8 @@ type FileLister interface {
 // maxProductForm is the largest product form body that the admin pages read.
 const maxProductForm = 64 << 10
 
-// RegisterAdmin adds the admin pages to mux, which the caller guards with BasicAuth.
+// RegisterAdmin adds the admin pages to mux, which the caller guards with BasicAuth. A path under
+// /admin/ that no page has gets the error page, as under /.
 func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	s := site{Deps: d, pages: parsePages()}
 	mux.Handle("GET /admin/{$}", http.RedirectHandler("/admin/orders", http.StatusFound))
@@ -43,6 +44,7 @@ func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("POST /admin/products", s.createProduct)
 	mux.HandleFunc("GET /admin/products/{id}/edit", s.editProduct)
 	mux.HandleFunc("POST /admin/products/{id}", s.updateProduct)
+	mux.Handle("/admin/", s.unknown(mux, "/admin/"))
 }
 
 // productForm is what the product form shows: the fields as they stand, the files to choose

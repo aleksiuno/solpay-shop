@@ -197,7 +197,8 @@ func TestAdminRoutesForbidFramingAndCaching(t *testing.T) {
 }
 
 // Each admin route is mounted behind the credentials: a wrong method on its path gets the 405 that
-// names the methods it serves, which only a registered pattern gives.
+// names the methods it serves. The catch-alls for /admin/ and /api/v1/admin/ give that 405 only for
+// a path that a registered pattern serves, and a 404 for any other.
 func TestAdminRoutesAreMounted(t *testing.T) {
 	h := newRouter()
 	tests := []struct{ method, path, allow string }{
@@ -323,9 +324,9 @@ func TestTheAPIAnswersUnknownPathsInJSON(t *testing.T) {
 	assert.Equal(t, "method_not_allowed", errorCode(t, w))
 }
 
-// A path that no route serves gets the shop's error page. A wrong method on a path that a route
-// serves gets a plain-text 405 with Allow, as ServeMux sends it, so /healthz and the downloads keep
-// their plain-text answers.
+// A path that no route serves gets the shop's error page, under /admin/ once past the credentials.
+// A wrong method on a path that a route serves gets a plain-text 405 with Allow, as ServeMux sends
+// it, so /healthz and the downloads keep their plain-text answers.
 func TestUnknownPagesUseTheErrorPage(t *testing.T) {
 	h := newRouter()
 	tests := []struct {
@@ -338,10 +339,12 @@ func TestUnknownPagesUseTheErrorPage(t *testing.T) {
 		{http.MethodPost, "/p/x", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
 		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
 		{http.MethodPost, "/d/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
+		{http.MethodGet, "/admin/no-such-page", http.StatusNotFound, "", "text/html; charset=utf-8", "There is no such page."},
+		{http.MethodDelete, "/admin/orders", http.StatusMethodNotAllowed, "GET, HEAD", "text/plain; charset=utf-8", "Method Not Allowed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			w := request(h, tt.method, tt.path)
+			w := request(h, tt.method, tt.path, withAuth(adminUser, adminPass))
 			assert.Equal(t, tt.code, w.Code)
 			assert.Equal(t, tt.allow, w.Header().Get("Allow"))
 			assert.Equal(t, tt.contentType, w.Header().Get("Content-Type"))
