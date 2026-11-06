@@ -2,7 +2,6 @@ package payment
 
 import (
 	"fmt"
-	"math"
 	"time"
 	"uuid"
 
@@ -61,10 +60,10 @@ type Decision struct {
 // block time, now is not. An on-time payment to a pending or underpaid order is credited as the
 // order's Credit rule says, and the order becomes paid at the payment's time once it has received
 // its amount. One to a paid or fulfilled order, which can arrive in the same poll as the payment
-// that paid it, is credited too, as an overpayment. Any other valid payment is late: after the
-// deadline, or to an expired or refunded order. It is recorded, but it changes nothing; for an
-// expired order, the late row is what lets an admin refund it. A valid verdict that pays nothing
-// is an error, since Verify never gives one.
+// that paid it, is credited too, by the same rule, as an overpayment. Any other valid payment is
+// late: after the deadline, or to an expired or refunded order. It is recorded, but it changes
+// nothing; for an expired order, the late row is what lets an admin refund it. A valid verdict
+// that pays nothing is an error, since Verify never gives one.
 func Decide(o order.Order, c Candidate, now time.Time) (Decision, error) {
 	d := Decision{
 		Payment: Payment{
@@ -146,11 +145,12 @@ func Decide(o order.Order, c Candidate, now time.Time) (Decision, error) {
 		if !onTime {
 			return late()
 		}
-		if lamports > math.MaxInt64-o.ReceivedLamports {
-			return Decision{}, fmt.Errorf("payment: crediting %d lamports to %d received overflows int64", lamports, o.ReceivedLamports)
+		_, received, err := o.Credit(lamports)
+		if err != nil {
+			return Decision{}, err
 		}
-		d.Payment.Outcome, d.Received = Credited, o.ReceivedLamports+lamports
-		overpaid(event, d.Received-o.AmountLamports)
+		d.Payment.Outcome, d.Received = Credited, received
+		overpaid(event, received-o.AmountLamports)
 		return d, nil
 
 	case order.Expired, order.Refunded:

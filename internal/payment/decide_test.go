@@ -268,7 +268,7 @@ func TestDecideRefusesACreditThatOverflows(t *testing.T) {
 				o.Status, o.AmountLamports, o.ReceivedLamports = status, math.MaxInt64, math.MaxInt64-1
 			})
 			_, err := payment.Decide(o, candidate(2, &before), before)
-			assert.Error(t, err)
+			assert.ErrorContains(t, err, "overflows int64")
 		})
 	}
 }
