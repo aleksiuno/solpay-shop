@@ -16,9 +16,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -37,8 +34,7 @@ import (
 )
 
 const (
-	defaultRPC = "https://api.devnet.solana.com"
-	faucetURL  = "https://faucet.solana.com"
+	faucetURL = "https://faucet.solana.com"
 
 	// A payment's blockhash expires about a minute after devpay fetches it, so confirmation
 	// ends well within payTimeout. Two checks every pollEvery stay far below the public
@@ -59,7 +55,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	keypair := fs.String("keypair", "", "solana-keygen `file` of the wallet that pays")
 	newKeypair := fs.String("new-keypair", "", "create a keypair `file` (mode 0600), print its address and exit")
-	rpcURL := fs.String("rpc", defaultRPC, "devnet JSON-RPC `URL`")
+	rpcURL := fs.String("rpc", solana.DevnetRPCURL, "devnet JSON-RPC `URL`")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage:
   devpay -new-keypair FILE
@@ -101,11 +97,14 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 	if *keypair == "" {
 		return usageError(stderr, "-keypair is required: the wallet that pays")
 	}
-	ep, err := parseEndpoint(*rpcURL)
+	// A keyed endpoint carries its API key in the URL's path, query or userinfo, so devpay names it
+	// only as scheme://host: the endpoint's HTTP client rewrites the URL in net/http's errors, and
+	// msgs redacts it in solana-go's.
+	ep, err := solana.ParseEndpoint(*rpcURL)
 	if err != nil {
-		return usageError(stderr, err.Error())
+		return usageError(stderr, "-rpc wants an https URL, or http to a loopback host")
 	}
-	msgs := redacting{stderr, ep.hide}
+	msgs := redacting{stderr, ep}
 	req, err := solanapay.Parse(fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "devpay: payment URL: %v\n", err)
@@ -122,7 +121,8 @@ contains '&'. devpay checks the RPC node's genesis hash and pays on devnet only.
 	context.AfterFunc(ctx, stop) // after the first signal, a second one kills devpay
 	ctx, cancel := context.WithTimeout(ctx, payTimeout)
 	defer cancel()
-	sig, err := pay(ctx, ep.client(), key, req, msgs)
+	client := rpc.NewWithCustomRPCClient(jsonrpc.NewClientWithOpts(*rpcURL, &jsonrpc.RPCClientOpts{HTTPClient: ep.HTTPClient(rpcTimeout)}))
+	sig, err := pay(ctx, client, key, req, msgs)
 	if err != nil {
 		fmt.Fprintf(msgs, "devpay: %v\n", err)
 		return 1
@@ -137,69 +137,15 @@ func usageError(stderr io.Writer, msg string) int {
 	return 2
 }
 
-// endpoint is a checked -rpc URL: https, or plain http only to a loopback host. A keyed endpoint
-// carries its API key in the URL's path, query or userinfo, so devpay names it only as
-// scheme://host: the client rewrites the URL in net/http's errors, which quote it, and hide
-// replaces it in solana-go's messages, which print the URL of the request sent: net/http
-// normalizes it, dropping an empty port for example.
-type endpoint struct {
-	raw, safe string
-	hide      *strings.Replacer
-}
-
-// parseEndpoint checks raw. The error never repeats it.
-func parseEndpoint(raw string) (endpoint, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
-		return endpoint{}, errors.New("-rpc wants an https URL, or http to localhost")
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, raw, nil)
-	if err != nil {
-		return endpoint{}, errors.New("-rpc wants an https URL, or http to localhost")
-	}
-	safe := u.Scheme + "://" + u.Host
-	return endpoint{raw: raw, safe: safe, hide: strings.NewReplacer(raw, safe, u.String(), safe, req.URL.String(), safe)}, nil
-}
-
-func isLoopback(host string) bool {
-	ip := net.ParseIP(host)
-	return host == "localhost" || ip != nil && ip.IsLoopback()
-}
-
-// client returns an RPC client for e whose errors name the endpoint only as e.safe.
-func (e endpoint) client() *rpc.Client {
-	hc := &http.Client{
-		Timeout: rpcTimeout,
-		// The genesis check vouches for this endpoint only, so a redirect must not take the
-		// signed transaction to another node, which could be on another cluster.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	return rpc.NewWithCustomRPCClient(jsonrpc.NewClientWithOpts(e.raw, &jsonrpc.RPCClientOpts{HTTPClient: hidingClient{hc, e.safe}}))
-}
-
-// hidingClient is an *http.Client whose errors give the endpoint as safe.
-type hidingClient struct {
-	*http.Client
-	safe string
-}
-
-func (c hidingClient) Do(req *http.Request) (*http.Response, error) {
-	resp, err := c.Client.Do(req) //nolint:gosec // G704: the URL is the -rpc endpoint the user chose, checked by parseEndpoint
-	if ue, ok := errors.AsType[*url.Error](err); ok {
-		ue.URL = c.safe
-	}
-	return resp, err
-}
-
-// redacting writes to w with r applied. Every message is one Write call, so a URL is never split
-// across two.
+// redacting writes to w with the endpoint's URL redacted. Every message is one Write call, so a
+// URL is never split across two.
 type redacting struct {
-	w io.Writer
-	r *strings.Replacer
+	w  io.Writer
+	ep solana.Endpoint
 }
 
 func (rw redacting) Write(p []byte) (int, error) {
-	if _, err := rw.r.WriteString(rw.w, string(p)); err != nil {
+	if _, err := io.WriteString(rw.w, rw.ep.Redact(string(p))); err != nil {
 		return 0, err
 	}
 	return len(p), nil
@@ -238,8 +184,8 @@ func writeKeypair(path string) (sol.PublicKey, error) {
 
 // pay sends the transfer that req asks for from the wallet of key and waits until the cluster
 // confirms it. It checks everything it can before sending: the request, that the RPC node is on
-// devnet and that the wallet holds the amount. Progress goes to log.
-func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solanapay.Request, log io.Writer) (sol.Signature, error) {
+// devnet and that the wallet holds the amount. Progress messages go to progress.
+func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solanapay.Request, progress io.Writer) (sol.Signature, error) {
 	payer := key.PublicKey()
 	inst, err := transfer(req, payer)
 	if err != nil {
@@ -278,7 +224,7 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 	// The first signature identifies the transaction, so it is shown before the send: if the send
 	// fails in transit, the node may have received the transaction all the same.
 	sig := tx.Signatures[0]
-	fmt.Fprintf(log, "Paying %s SOL from %s to %s on devnet.\nTransaction: https://explorer.solana.com/tx/%s?cluster=devnet\n",
+	fmt.Fprintf(progress, "Paying %s SOL from %s to %s on devnet.\nTransaction: https://explorer.solana.com/tx/%s?cluster=devnet\n",
 		money.FormatSOL(req.Lamports), payer, req.Recipient, sig)
 	if _, err := client.SendTransactionWithOpts(ctx, tx, rpc.TransactionOpts{PreflightCommitment: rpc.CommitmentConfirmed}); err != nil {
 		if _, refused := errors.AsType[*jsonrpc.RPCError](err); refused {
@@ -286,8 +232,8 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 		}
 		return sol.Signature{}, fmt.Errorf("send the transaction: %w; the node may have received it, so look the transaction up before paying again", err)
 	}
-	fmt.Fprintln(log, "Sent; waiting for confirmation.")
-	if err := confirm(ctx, client, sig, latest.Value.LastValidBlockHeight, pollEvery, log); err != nil {
+	fmt.Fprintln(progress, "Sent; waiting for confirmation.")
+	if err := confirm(ctx, client, sig, latest.Value.LastValidBlockHeight, pollEvery, progress); err != nil {
 		return sol.Signature{}, err
 	}
 	return sig, nil
@@ -339,14 +285,14 @@ func checkDevnet(ctx context.Context, client *rpc.Client) error {
 // the cluster's block height passes lastValid, the transaction's blockhash is no longer accepted.
 // The height alone does not decide: the status is checked once more after the height has passed,
 // in case the transaction landed in between. A failed status check is retried.
-func confirm(ctx context.Context, client *rpc.Client, sig sol.Signature, lastValid uint64, every time.Duration, log io.Writer) error {
+func confirm(ctx context.Context, client *rpc.Client, sig sol.Signature, lastValid uint64, every time.Duration, progress io.Writer) error {
 	expired := false
 	for {
 		st, err := status(ctx, client, sig)
 		switch {
 		case err != nil:
 			if ctx.Err() == nil {
-				fmt.Fprintf(log, "Status check failed, retrying: %v\n", readable(err))
+				fmt.Fprintf(progress, "Status check failed, retrying: %v\n", readable(err))
 			}
 		case st == nil: // not seen by the node yet
 			if expired {
@@ -383,13 +329,14 @@ func status(ctx context.Context, client *rpc.Client, sig sol.Signature) (*rpc.Si
 	return out.Value[0], nil
 }
 
-// rpcError shows a JSON-RPC error from the node on one line, followed by the program logs that a
-// failed preflight simulation returns. solana-go's own Error prints a multi-line struct dump.
-type rpcError struct{ err *jsonrpc.RPCError }
+// jsonRPCError shows a JSON-RPC error from the node on one line, worded as the shop words it,
+// followed by the program logs that a failed preflight simulation returns. solana-go's own Error
+// prints a multi-line struct dump.
+type jsonRPCError struct{ err *jsonrpc.RPCError }
 
-func (e rpcError) Error() string {
+func (e *jsonRPCError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "RPC error %d: %s", e.err.Code, e.err.Message)
+	fmt.Fprintf(&b, "JSON-RPC error %d: %s", e.err.Code, e.err.Message)
 	if data, ok := e.err.Data.(map[string]any); ok {
 		if logs, ok := data["logs"].([]any); ok {
 			for _, line := range logs {
@@ -400,12 +347,13 @@ func (e rpcError) Error() string {
 	return b.String()
 }
 
-func (e rpcError) Unwrap() error { return e.err }
+func (e *jsonRPCError) Unwrap() error { return e.err }
 
-// readable returns err with a JSON-RPC error in its chain replaced by an rpcError, or err itself.
+// readable returns err with a JSON-RPC error in its chain replaced by a *jsonRPCError, or err
+// itself.
 func readable(err error) error {
 	if re, ok := errors.AsType[*jsonrpc.RPCError](err); ok {
-		return rpcError{re}
+		return &jsonRPCError{re}
 	}
 	return err
 }
