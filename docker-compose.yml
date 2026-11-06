@@ -1,7 +1,8 @@
 name: solpay-shop
 
 # Every secret comes from .env (make env creates it); a missing one stops compose before it starts
-# anything. Host ports are published on loopback only.
+# anything. An optional setting left unset reaches the app empty, so the app's own default applies.
+# Host ports are published on loopback only.
 
 x-app: &app
   build:
@@ -12,10 +13,10 @@ x-app: &app
   environment:
     APP_ADDR: ":8080"
     DATABASE_URL: postgres://solpay:${POSTGRES_PASSWORD:?not set, run make env}@db:5432/solpay?sslmode=disable
-    SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
+    SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
     MERCHANT_ADDRESS: ${MERCHANT_ADDRESS:?not set, run make env and put a devnet wallet address in .env}
-    ORDER_TTL: ${ORDER_TTL:-15m}
-    POLL_INTERVAL: ${POLL_INTERVAL:-5s}
+    ORDER_TTL: ${ORDER_TTL:-}
+    POLL_INTERVAL: ${POLL_INTERVAL:-}
     ADMIN_USER: ${ADMIN_USER:?not set, run make env}
     ADMIN_PASS: ${ADMIN_PASS:?not set, run make env}
     DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?not set, run make env}
@@ -29,6 +30,9 @@ x-app: &app
 
 services:
   db:
+    # A major tag on purpose, unlike the Dockerfile's digest-pinned base images: nothing bumps pins
+    # here automatically, so the tag is how the dev database gets 16.x and Alpine patch releases.
+    # seed and the integration tests (internal/db/main_test.go) use the same tag.
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: solpay
