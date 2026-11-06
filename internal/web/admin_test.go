@@ -92,13 +92,24 @@ func TestAdminListsEveryProduct(t *testing.T) {
 
 	assert.False(t, a.activeOnly, "those no longer for sale too")
 	assert.Contains(t, body, `<a class="button" href="/admin/products/new">New product</a>`)
-	assert.Contains(t, body, "<tr><td><code>go-payments-checklist</code></td><td>Go payments checklist</td><td>0.005 SOL</td>"+
-		"<td><code>checklist-v2.md</code></td><td>yes</td><td><a href=\"/admin/products/"+checklist.ID.String()+"/edit\">Edit</a></td></tr>")
-	assert.Contains(t, body, "<td>Old notes</td><td>0.001 SOL</td><td><code>old.md</code></td><td>no</td>")
+	assert.Contains(t, body, "<tr><td><code>go-payments-checklist</code></td>"+
+		"<td><a href=\"/admin/products/"+checklist.ID.String()+"/edit\">Go payments checklist</a></td><td>0.005 SOL</td>"+
+		"<td><code>checklist-v2.md</code></td><td>yes</td></tr>")
+	assert.Contains(t, body, "<a href=\"/admin/products/"+retired.ID.String()+"/edit\">Old notes</a></td><td>0.001 SOL</td><td><code>old.md</code></td><td>no</td></tr>")
+}
+
+// The product list scrolls sideways on a narrow screen, as the other lists do, and names every
+// column it has.
+func TestAdminListScrollsAndNamesItsColumns(t *testing.T) {
+	body := requirePage(t, get(newAdmin(&productAdmin{products: []product.Product{checklist}}), "/admin/products"), http.StatusOK)
+	assert.Contains(t, body, "<div class=\"table-scroll\">\n<table class=\"list\">")
+	assert.Contains(t, body, "<thead><tr><th>Slug</th><th>Title</th><th>Price</th><th>File</th><th>For sale</th></tr></thead>")
+	assert.NotContains(t, body, "<th></th>")
 }
 
 func TestAdminListWithNoProducts(t *testing.T) {
-	assert.Contains(t, requirePage(t, get(newAdmin(&productAdmin{}), "/admin/products"), http.StatusOK), "No products yet.")
+	assert.Contains(t, requirePage(t, get(newAdmin(&productAdmin{}), "/admin/products"), http.StatusOK),
+		`<tr><td colspan="5">No products yet.</td></tr>`)
 }
 
 func TestAdminListWhenTheStoreFails(t *testing.T) {
