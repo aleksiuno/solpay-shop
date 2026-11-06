@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/aleksiuno/solpay-shop/internal/order"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 	"github.com/aleksiuno/solpay-shop/internal/web"
 )
@@ -84,6 +86,76 @@ func adminOver(d web.Deps) *http.ServeMux {
 	mux := http.NewServeMux()
 	web.RegisterAdmin(mux, d)
 	return mux
+}
+
+// navBar is the admin's navigation bar on a page of the section whose list is at section, with
+// current as that entry's aria-current.
+func navBar(section, current string) string {
+	bar := `<nav class="admin" aria-label="Admin">`
+	for _, e := range []struct{ path, text string }{{"/admin/orders", "Orders"}, {"/admin/events", "Events"}, {"/admin/products", "Products"}} {
+		attr := ""
+		if e.path == section {
+			attr = ` aria-current="` + current + `"`
+		}
+		bar += "\n<a href=\"" + e.path + "\"" + attr + ">" + e.text + "</a>"
+	}
+	return bar + "\n</nav>"
+}
+
+// Every admin page, an error page too, has the one navigation bar, which marks the page's
+// section: "page" on the section's list, "true" on its other pages, the error page in place of
+// the list among them. The shop's pages have none.
+func TestAdminPagesShareNavigation(t *testing.T) {
+	now := deadline.Add(time.Hour)
+	mux := adminOver(web.Deps{
+		ProductAdmin: &productAdmin{products: []product.Product{checklist}}, ProductFiles: fileList{names: []string{"checklist-v2.md"}},
+		OrderAdmin: &orderAdmin{orders: []order.Order{pending}, refundErr: order.ErrStaleState}, Ledger: ledger{}, EventLog: &eventLog{},
+		Now: func() time.Time { return now },
+	})
+	badPrice := productForm()
+	badPrice.Set("price", "five")
+	orderPath, productPath := "/admin/orders/"+pending.ID.String(), "/admin/products/"+checklist.ID.String()
+	tests := []struct {
+		path    string
+		form    url.Values // posted when set
+		status  int
+		section string // the list page of the page's section
+		current string
+	}{
+		{"/admin/orders", nil, http.StatusOK, "/admin/orders", "page"},
+		{"/admin/orders?status=paid", nil, http.StatusOK, "/admin/orders", "page"},
+		{"/admin/orders?status=lost", nil, http.StatusBadRequest, "/admin/orders", "page"},
+		{orderPath, nil, http.StatusOK, "/admin/orders", "true"},
+		{orderPath + "/refund", url.Values{}, http.StatusConflict, "/admin/orders", "true"},
+		{"/admin/orders/" + retired.ID.String(), nil, http.StatusNotFound, "/admin/orders", "true"},
+		{"/admin/events", nil, http.StatusOK, "/admin/events", "page"},
+		{"/admin/events?level=debug", nil, http.StatusBadRequest, "/admin/events", "page"},
+		{"/admin/products", nil, http.StatusOK, "/admin/products", "page"},
+		{"/admin/products/new", nil, http.StatusOK, "/admin/products", "true"},
+		{"/admin/products", badPrice, http.StatusUnprocessableEntity, "/admin/products", "true"},
+		{productPath + "/edit", nil, http.StatusOK, "/admin/products", "true"},
+		{"/admin/products/" + retired.ID.String() + "/edit", nil, http.StatusNotFound, "/admin/products", "true"},
+	}
+	for _, tt := range tests {
+		assert.Contains(t, requirePage(t, send(mux, tt.path, tt.form), tt.status), navBar(tt.section, tt.current), tt.path)
+	}
+	failing := adminOver(web.Deps{ProductAdmin: &productAdmin{listErr: errBoom}, EventLog: &eventLog{err: errBoom}})
+	for _, path := range []string{"/admin/events", "/admin/products"} {
+		assert.Contains(t, requirePage(t, get(failing, path), http.StatusInternalServerError), navBar(path, "true"), path)
+	}
+
+	shop, _ := newSite(web.Deps{Products: &catalogue{products: []product.Product{checklist}}})
+	for _, path := range []string{"/", "/p/go-payments-checklist", "/p/no-such-product"} {
+		assert.NotContains(t, get(shop, path).Body.String(), "<nav", path)
+	}
+}
+
+// send gets path, or posts form to it when form is set.
+func send(h http.Handler, path string, form url.Values) *httptest.ResponseRecorder {
+	if form == nil {
+		return get(h, path)
+	}
+	return post(h, path, form)
 }
 
 func TestAdminListsEveryProduct(t *testing.T) {

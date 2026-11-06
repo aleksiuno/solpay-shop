@@ -33,7 +33,7 @@ const maxProductForm = 64 << 10
 // RegisterAdmin adds the admin pages to mux, which the caller guards with BasicAuth. A path under
 // /admin/ that no page has gets the error page, as under /.
 func RegisterAdmin(mux *http.ServeMux, d Deps) {
-	s := site{Deps: d}
+	s := site{Deps: d, admin: true}
 	mux.Handle("GET /admin/{$}", http.RedirectHandler("/admin/orders", http.StatusFound))
 	mux.HandleFunc("GET /admin/orders", s.adminOrders)
 	mux.HandleFunc("GET /admin/orders/{id}", s.adminOrderPage)
@@ -45,6 +45,50 @@ func RegisterAdmin(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /admin/products/{id}/edit", s.editProduct)
 	mux.HandleFunc("POST /admin/products/{id}", s.updateProduct)
 	mux.Handle("/admin/", s.unknown(mux, "/admin/"))
+}
+
+// adminSection is a section of the admin, by the path of its list page and its name in the
+// navigation bar.
+type adminSection struct {
+	path, name string
+}
+
+// adminSections are the admin's sections, in the order its navigation bar lists them.
+var adminSections = []adminSection{
+	{path: "/admin/orders", name: "Orders"},
+	{path: "/admin/events", name: "Events"},
+	{path: "/admin/products", name: "Products"},
+}
+
+// current returns the aria-current of the section's entry in the navigation bar, on the page that r
+// asks for: "page" on the section's list, "true" on its other pages, and "" outside it. Only a GET
+// of the list's path shows the list, and only when it is not answered with the error page, which
+// failed reports. A path under it shows another page of the section, such as an order's page or a
+// product's form, and so does a POST to the list's path, which shows the product form again with a
+// problem.
+func (sec adminSection) current(r *http.Request, failed bool) string {
+	switch p := r.URL.Path; {
+	case p == sec.path && r.Method == http.MethodGet && !failed:
+		return "page"
+	case p == sec.path || strings.HasPrefix(p, sec.path+"/"):
+		return "true"
+	}
+	return ""
+}
+
+// navLink is an entry of the admin's navigation bar, with its aria-current.
+type navLink struct {
+	Href, Text, Current string
+}
+
+// adminNav returns the admin's navigation bar on the page that r asks for, or on the error page in
+// its place when failed is set.
+func adminNav(r *http.Request, failed bool) []navLink {
+	nav := make([]navLink, len(adminSections))
+	for i, sec := range adminSections {
+		nav[i] = navLink{Href: sec.path, Text: sec.name, Current: sec.current(r, failed)}
+	}
+	return nav
 }
 
 // productForm is what the product form shows: the fields as they stand, the files to choose
