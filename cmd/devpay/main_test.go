@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -119,7 +120,8 @@ func TestWriteKeypair(t *testing.T) {
 }
 
 // fakeRPC is a JSON-RPC endpoint that answers each method with its handler's result and records
-// the methods called. Handlers run on the server's goroutines, so they report with assert.
+// the methods called, with the path and query of each call. Handlers run on the server's
+// goroutines, so they report with assert.
 type fakeRPC struct {
 	t        *testing.T
 	url      string
@@ -127,6 +129,7 @@ type fakeRPC struct {
 
 	mu    sync.Mutex
 	calls []string
+	uris  []string
 }
 
 func newFakeRPC(t *testing.T, handlers map[string]func(params []json.RawMessage) any) (*fakeRPC, *rpc.Client) {
@@ -149,6 +152,7 @@ func (f *fakeRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, req.Method)
+	f.uris = append(f.uris, r.URL.RequestURI())
 	f.mu.Unlock()
 	resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
 	h, ok := f.handlers[req.Method]
@@ -197,6 +201,12 @@ func (f *fakeRPC) called() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeRPC) requestURIs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.uris...)
 }
 
 func withContext(value any) any {
@@ -335,7 +345,7 @@ func TestPayShowsRPCErrorsOnOneLine(t *testing.T) {
 	_, client := newFakeRPC(t, handlers)
 
 	_, err := pay(t.Context(), client, testKey("payer"), order(t), io.Discard)
-	require.EqualError(t, err, "send the transaction: RPC error -32002: "+
+	require.EqualError(t, err, "send the transaction: JSON-RPC error -32002: "+
 		"Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1\n"+
 		"  Program 11111111111111111111111111111111 invoke [1]\n"+
 		"  Transfer: insufficient lamports 0, need 1000000")
@@ -449,23 +459,6 @@ func TestConfirmRetriesFailedChecks(t *testing.T) {
 	assert.Contains(t, log.String(), "Status check failed, retrying")
 }
 
-func TestParseEndpoint(t *testing.T) {
-	for _, ok := range []string{"https://api.devnet.solana.com", "http://localhost:8899", "http://127.0.0.1:8899", "http://[::1]:8899"} {
-		_, err := parseEndpoint(ok)
-		require.NoError(t, err, ok)
-	}
-	for _, bad := range []string{"http://rpc.example/key-SECRET", "ftp://rpc.example", "https://", "rpc.example", "http://localhost.example", "%zz"} {
-		_, err := parseEndpoint(bad)
-		require.EqualError(t, err, "-rpc wants an https URL, or http to localhost", bad)
-	}
-
-	raw := "https://user:pw-SECRET@rpc.example/v2/key-SECRET?api-key=SECRET"
-	e, err := parseEndpoint(raw)
-	require.NoError(t, err)
-	assert.Equal(t, "https://rpc.example", e.safe)
-	assert.Equal(t, "rpc call getBalance() on https://rpc.example: EOF", e.hide.Replace("rpc call getBalance() on "+raw+": EOF"))
-}
-
 func TestRunFollowsNoRedirect(t *testing.T) {
 	keypair := filepath.Join(t.TempDir(), "payer.json")
 	_, err := writeKeypair(keypair)
@@ -499,6 +492,7 @@ func TestRunUsage(t *testing.T) {
 		"new keypair and a keypair": {[]string{"-new-keypair", "k.json", "-keypair", "p.json"}, 2, "-new-keypair takes no URL"},
 		"unknown flag":              {[]string{"-amount", "1"}, 2, "flag provided but not defined"},
 		"plain http to a remote":    {[]string{"-keypair", "k.json", "-rpc", "http://rpc.example/key-SECRET", url}, 2, "-rpc wants an https URL"},
+		"a port but no host":        {[]string{"-keypair", "k.json", "-rpc", "https://:443", url}, 2, "-rpc wants an https URL"},
 		"bad URL":                   {[]string{"-keypair", "k.json", "solana:" + addr("merchant") + "?amount=1e3"}, 1, "payment URL: amount"},
 		"missing keypair file":      {[]string{"-keypair", filepath.Join(t.TempDir(), "none.json"), url}, 1, "devpay -new-keypair creates one"},
 	}
@@ -532,10 +526,13 @@ func TestRunPays(t *testing.T) {
 	handlers, sent := devnet(t, 2_000_000)
 	f, _ := newFakeRPC(t, handlers)
 	var stdout, stderr bytes.Buffer
-	require.Equal(t, 0, run([]string{"-keypair", keypair, "-rpc", f.url, order(t).URL()}, &stdout, &stderr), stderr.String())
+	keyed := f.url + "/v2/key-SECRET?api-key=SECRET"
+	require.Equal(t, 0, run([]string{"-keypair", keypair, "-rpc", keyed, order(t).URL()}, &stdout, &stderr), stderr.String())
 	require.NotNil(t, sent.get())
 	assert.Equal(t, sent.get().Signatures[0].String()+"\n", stdout.String(), "stdout is the signature alone")
 	assert.Contains(t, stderr.String(), "Confirmed.")
+	assert.NotContains(t, stderr.String(), "SECRET")
+	assert.Equal(t, []string{"/v2/key-SECRET?api-key=SECRET"}, slices.Compact(f.requestURIs()), "every call carries the key")
 
 	handlers["getGenesisHash"] = func([]json.RawMessage) any { return addr("another cluster") }
 	stdout.Reset()
