@@ -126,7 +126,7 @@ type view struct {
 func (s site) render(w http.ResponseWriter, r *http.Request, status int, page string, v view) {
 	var buf bytes.Buffer
 	if err := s.pages[page].ExecuteTemplate(&buf, "base", v); err != nil {
-		s.Log.LogAttrs(r.Context(), slog.LevelError, "render page", slog.String("page", page), slog.Any("error", err))
+		s.Log.LogAttrs(r.Context(), slog.LevelError, "page render failed", slog.String("page", page), slog.Any("error", err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

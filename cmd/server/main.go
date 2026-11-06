@@ -52,7 +52,7 @@ func main() {
 	}
 	logger, closeLog, err := newLogger(stdout, cfg.LogFile)
 	if err != nil {
-		stdout.Error("open log file", slog.Any("error", err))
+		stdout.Error("log file not opened", slog.Any("error", err))
 		os.Exit(1)
 	}
 	// Lines logged with a request's context carry its request id.
@@ -64,7 +64,7 @@ func main() {
 		logger.Error("server exited with an error", slog.Any("error", runErr))
 	}
 	if err := closeLog(); err != nil {
-		stdout.Error("close log file", slog.Any("error", err))
+		stdout.Error("log file not closed", slog.Any("error", err))
 	}
 	if runErr != nil {
 		os.Exit(1)
