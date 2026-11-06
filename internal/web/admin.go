@@ -124,10 +124,7 @@ func (s site) saveProduct(w http.ResponseWriter, r *http.Request, form productFo
 		return
 	}
 	f := r.PostForm
-	// A browser sends a text area's line breaks as CRLF but counts each as one character against
-	// maxlength, as the product rules count an LF.
-	form.Slug, form.Title = f.Get("slug"), f.Get("title")
-	form.Description = strings.ReplaceAll(f.Get("description"), "\r\n", "\n")
+	form.Slug, form.Title, form.Description = f.Get("slug"), f.Get("title"), f.Get("description")
 	form.Price, form.FileName, form.Active = f.Get("price"), f.Get("file_name"), f.Has("active")
 	lamports, err := money.ParseSOL(strings.TrimSpace(form.Price))
 	if err != nil {

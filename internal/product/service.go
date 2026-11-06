@@ -55,8 +55,9 @@ func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (Product, error) {
 }
 
 // Create checks p and stores it as a new product. It trims spaces around the title and description
-// first. A field that breaks a rule, or a file that does not exist, gives a *ValidationError;
-// a slug that another product has gives ErrSlugTaken.
+// first, and makes the description's CRLF line breaks LF. A field that breaks a rule, or a file
+// that does not exist, gives a *ValidationError; a slug that another product has gives
+// ErrSlugTaken.
 func (s *Service) Create(ctx context.Context, p Product) (Product, error) {
 	p, err := s.check(p, true)
 	if err != nil {
@@ -85,11 +86,13 @@ func (s *Service) Update(ctx context.Context, p Product) (Product, error) {
 	return s.repo.Update(ctx, p)
 }
 
-// check trims p's title and description, validates p and, if needFile, checks that its file
-// exists.
+// check trims p's title and description, makes the description's line breaks LF, validates p
+// and, if needFile, checks that its file exists.
 func (s *Service) check(p Product, needFile bool) (Product, error) {
 	p.Title = strings.TrimSpace(p.Title)
-	p.Description = strings.TrimSpace(p.Description)
+	// A browser sends a text area's line breaks as CRLF but counts each as one character against
+	// maxlength, as the product rules count an LF.
+	p.Description = strings.TrimSpace(strings.ReplaceAll(p.Description, "\r\n", "\n"))
 	if err := p.Validate(); err != nil {
 		return Product{}, err
 	}
