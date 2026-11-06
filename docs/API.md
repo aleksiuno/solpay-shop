@@ -299,6 +299,38 @@ An order can be refunded once it has received something: when it is `underpaid`,
 for any other order, `422 validation_failed` for a note that is too long or holds a NUL character,
 `404 not_found`, `400 invalid_request` for a body that is not one JSON object.
 
+### `GET /api/v1/admin/events`
+
+Lists the payment event log, a page of at most 100 events, the newest first. Three query
+parameters narrow it, each when given: `order_id`, to that order's events; `level`, to the events
+at that level, one of `info`, `warn` and `error`; and `before`, to the events older than the one
+with that id. An `order_id` that is not a UUID, another `level`, or a `before` that is not a
+positive whole number is `400 invalid_request`; an `order_id` that no order has gives an empty
+list.
+
+```sh
+curl -u "$ADMIN_USER:$ADMIN_PASS" 'localhost:8080/api/v1/admin/events?level=warn'
+```
+
+```json
+{
+  "events": [
+    {"id": 9, "order_id": "<ORDER_ID>", "level": "warn", "kind": "payment.late",
+     "message": "payment does not count towards the order", "signature": "<SIG>",
+     "data": {"block_time": "2026-11-03T12:16:00Z", "expires_at": "2026-11-03T12:15:00Z",
+              "lamports": 10000000, "on_time": false},
+     "created_at": "2026-11-03T12:16:05Z"}
+  ],
+  "next_before": null
+}
+```
+
+An event is as in `GET /api/v1/admin/orders/{id}`. Its `order_id` is `null` when it concerns no
+order, such as a failed RPC call, its `signature` is `""` when it is about no transaction, and its
+`data` is `null` when it has no details. `next_before` is the last event's id when the page is
+full: pass it as `before`, with the same filters, for the next page. It is `null` on a shorter
+page, which is the last; a full page can be the last too, and then the next one is empty.
+
 ## Walkthrough
 
 List the products, place an order and read it back, then pay its URL with devpay
