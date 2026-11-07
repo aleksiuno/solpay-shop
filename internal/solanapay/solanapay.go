@@ -77,7 +77,7 @@ func Parse(raw string) (Request, error) {
 	case strings.Contains(recipient, ":"): // a link; base58 has no colon
 		return Request{}, errors.New("transaction requests (solana:https://…) are not supported")
 	}
-	if err := checkAddress(recipient); err != nil {
+	if err := CheckAddress(recipient); err != nil {
 		return Request{}, fmt.Errorf("recipient: %w", err)
 	}
 
@@ -104,7 +104,7 @@ func Parse(raw string) (Request, error) {
 		}
 	}
 	for _, ref := range q["reference"] {
-		if err := checkAddress(ref); err != nil {
+		if err := CheckAddress(ref); err != nil {
 			return Request{}, fmt.Errorf("reference: %w", err)
 		}
 		r.References = append(r.References, ref)
@@ -112,12 +112,15 @@ func Parse(raw string) (Request, error) {
 	return r, nil
 }
 
-// checkAddress reports whether s is the base58 encoding of 32 bytes, the form of a Solana
-// address.
-func checkAddress(s string) error {
-	b, err := base58.Decode(s)
-	if err != nil || len(b) != 32 {
-		return fmt.Errorf("%q is not a base58 address of 32 bytes", s)
+// CheckAddress returns an error unless s is the base58 encoding of 32 bytes, the form of a
+// Solana address.
+func CheckAddress(s string) error {
+	// 32 bytes take 32 to 44 characters. Others are refused unread, since the time base58 takes to
+	// decode grows with the square of the length.
+	if len(s) >= 32 && len(s) <= 44 {
+		if b, err := base58.Decode(s); err == nil && len(b) == 32 {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("%q is not a base58 address of 32 bytes", s)
 }

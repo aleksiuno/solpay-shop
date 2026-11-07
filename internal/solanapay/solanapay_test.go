@@ -1,6 +1,7 @@
 package solanapay
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"testing"
 
@@ -94,5 +95,13 @@ func TestParseRejects(t *testing.T) {
 	for in, want := range tests {
 		_, err := Parse(in)
 		require.ErrorContains(t, err, want, in)
+	}
+}
+
+// The shortest and the longest spellings of 32 bytes, 32 and 44 characters, are both addresses.
+func TestCheckAddressTakesEveryLengthOf32Bytes(t *testing.T) {
+	for _, b := range [][]byte{make([]byte, 32), bytes.Repeat([]byte{0xff}, 32)} {
+		s := base58.Encode(b)
+		assert.NoError(t, CheckAddress(s), "%d characters", len(s))
 	}
 }
