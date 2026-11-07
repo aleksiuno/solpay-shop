@@ -25,7 +25,6 @@ import (
 	"time"
 
 	sol "github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
 
@@ -199,10 +198,17 @@ func writeKeypair(path string) (sol.PublicKey, error) {
 // confirms it. It checks everything it can before sending: the request, that the RPC node is on
 // devnet and that the wallet holds the amount. Progress messages go to progress.
 func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solanapay.Request, progress io.Writer) (sol.Signature, error) {
+	// solana.TransferTransaction refuses all three too, but only after the balance and the
+	// blockhash are read. Checked here, they cost no RPC call and say what is wrong with the URL,
+	// before an unfunded wallet is sent to the faucet.
 	payer := key.PublicKey()
-	inst, err := transfer(req, payer)
-	if err != nil {
-		return sol.Signature{}, err
+	switch {
+	case len(req.References) == 0:
+		return sol.Signature{}, errors.New("the URL has no reference, so the shop could not detect this payment")
+	case req.Lamports <= 0:
+		return sol.Signature{}, errors.New("the URL names no amount")
+	case req.Recipient == payer.String(): // both are base58 of 32 bytes, which has one spelling
+		return sol.Signature{}, errors.New("the payer is the recipient: pay from another wallet")
 	}
 	if err := checkDevnet(ctx, client); err != nil {
 		return sol.Signature{}, err
@@ -221,9 +227,19 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 	if err != nil {
 		return sol.Signature{}, fmt.Errorf("get a recent blockhash: %w", readable(err))
 	}
-	tx, err := sol.NewTransaction([]sol.Instruction{inst}, latest.Value.Blockhash, sol.TransactionPayer(payer))
+	unsigned, err := solana.TransferTransaction(solana.Transfer{
+		Payer:      payer.String(),
+		Recipient:  req.Recipient,
+		Lamports:   req.Lamports,
+		References: req.References,
+		Blockhash:  latest.Value.Blockhash.String(),
+	})
 	if err != nil {
-		return sol.Signature{}, fmt.Errorf("build the transaction: %w", err)
+		return sol.Signature{}, err
+	}
+	tx, err := sol.TransactionFromBytes(unsigned)
+	if err != nil {
+		return sol.Signature{}, fmt.Errorf("decode the transaction: %w", err)
 	}
 	if _, err := tx.Sign(func(k sol.PublicKey) *sol.PrivateKey {
 		if k.Equals(payer) {
@@ -250,35 +266,6 @@ func pay(ctx context.Context, client *rpc.Client, key sol.PrivateKey, req solana
 		return sol.Signature{}, err
 	}
 	return sig, nil
-}
-
-// transfer builds the System Program transfer that pays req from payer. The request's references
-// follow the payer and the recipient as read-only, non-signer accounts, in the URL's order, as
-// Solana Pay specifies; the System Program ignores the extra accounts. It refuses a request the
-// shop could not detect or that would pay the payer itself.
-func transfer(req solanapay.Request, payer sol.PublicKey) (sol.Instruction, error) {
-	if len(req.References) == 0 {
-		return nil, errors.New("the URL has no reference, so the shop could not detect this payment")
-	}
-	if req.Lamports <= 0 {
-		return nil, errors.New("the URL names no amount")
-	}
-	recipient, err := sol.PublicKeyFromBase58(req.Recipient)
-	if err != nil {
-		return nil, fmt.Errorf("recipient: %w", err)
-	}
-	if recipient.Equals(payer) {
-		return nil, errors.New("the payer is the recipient: pay from another wallet")
-	}
-	t := system.NewTransferInstruction(uint64(req.Lamports), payer, recipient)
-	for _, ref := range req.References {
-		k, err := sol.PublicKeyFromBase58(ref)
-		if err != nil {
-			return nil, fmt.Errorf("reference: %w", err)
-		}
-		t.Append(sol.Meta(k)) // neither writable nor a signer
-	}
-	return t.Build(), nil
 }
 
 // checkDevnet refuses any RPC node whose genesis hash is not devnet's: a Solana Pay URL names no

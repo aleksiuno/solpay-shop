@@ -63,47 +63,6 @@ func explorer(sig sol.Signature) string {
 	return "https://explorer.solana.com/tx/" + sig.String() + "?cluster=devnet"
 }
 
-func TestTransferAttachesReferences(t *testing.T) {
-	payer := testKey("payer").PublicKey()
-	req := request(t, solanapay.Request{
-		Recipient:  addr("merchant"),
-		Lamports:   1_000_000,
-		References: []string{addr("ref-2"), addr("ref-1")},
-	})
-	inst, err := transfer(req, payer)
-	require.NoError(t, err)
-
-	assert.Equal(t, system.ProgramID, inst.ProgramID())
-	data, err := inst.Data()
-	require.NoError(t, err)
-	assert.Equal(t, binary.LittleEndian.AppendUint64(binary.LittleEndian.AppendUint32(nil, 2), 1_000_000), data,
-		"System Program instruction 2 (Transfer) with the amount in lamports")
-
-	want := []*sol.AccountMeta{
-		{PublicKey: payer, IsSigner: true, IsWritable: true},
-		{PublicKey: testKey("merchant").PublicKey(), IsWritable: true},
-		{PublicKey: testKey("ref-2").PublicKey()}, // read-only and not a signer, in URL order
-		{PublicKey: testKey("ref-1").PublicKey()},
-	}
-	assert.Equal(t, want, inst.Accounts())
-}
-
-func TestTransferRefuses(t *testing.T) {
-	payer := testKey("payer").PublicKey()
-	tests := map[string]struct {
-		req  solanapay.Request
-		want string
-	}{
-		"no reference":       {solanapay.Request{Recipient: addr("merchant"), Lamports: 1}, "shop could not detect"},
-		"no amount":          {solanapay.Request{Recipient: addr("merchant"), References: []string{addr("ref")}}, "names no amount"},
-		"payer is recipient": {solanapay.Request{Recipient: payer.String(), Lamports: 1, References: []string{addr("ref")}}, "payer is the recipient"},
-	}
-	for name, tt := range tests {
-		_, err := transfer(request(t, tt.req), payer)
-		require.ErrorContains(t, err, tt.want, name)
-	}
-}
-
 func TestWriteKeypair(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data", "payer.json")
 	pub, err := writeKeypair(path)
@@ -359,14 +318,61 @@ func TestPayShowsRPCErrorsOnOneLine(t *testing.T) {
 	assert.True(t, ok, "the RPC error is still in the chain")
 }
 
-func TestPayChecksTheRequestFirst(t *testing.T) {
-	handlers, _ := devnet(t, 2_000_000)
-	f, client := newFakeRPC(t, handlers)
-	req := request(t, solanapay.Request{Recipient: addr("merchant"), Lamports: 1_000_000})
+func TestPayAttachesReferences(t *testing.T) {
+	key := testKey("payer")
+	handlers, sent := devnet(t, 2_000_000)
+	_, client := newFakeRPC(t, handlers)
+	req := request(t, solanapay.Request{
+		Recipient:  addr("merchant"),
+		Lamports:   1_000_000,
+		References: []string{addr("ref-2"), addr("ref-1")},
+	})
+	_, err := pay(t.Context(), client, key, req, io.Discard)
+	require.NoError(t, err)
 
-	_, err := pay(t.Context(), client, testKey("payer"), req, io.Discard)
-	require.ErrorContains(t, err, "no reference")
-	assert.Empty(t, f.called(), "no RPC call for a request devpay refuses")
+	tx := sent.get()
+	require.NotNil(t, tx)
+	require.Len(t, tx.Message.Instructions, 1)
+	inst := tx.Message.Instructions[0]
+	program, err := tx.Message.Program(inst.ProgramIDIndex)
+	require.NoError(t, err)
+	assert.Equal(t, system.ProgramID, program)
+	assert.Equal(t, binary.LittleEndian.AppendUint64(binary.LittleEndian.AppendUint32(nil, 2), 1_000_000), []byte(inst.Data),
+		"System Program instruction 2 (Transfer) with the amount in lamports")
+
+	accounts, err := inst.ResolveInstructionAccounts(&tx.Message)
+	require.NoError(t, err)
+	want := []*sol.AccountMeta{
+		{PublicKey: key.PublicKey(), IsSigner: true, IsWritable: true},
+		{PublicKey: testKey("merchant").PublicKey(), IsWritable: true},
+		{PublicKey: testKey("ref-2").PublicKey()}, // read-only and not a signer, in URL order
+		{PublicKey: testKey("ref-1").PublicKey()},
+	}
+	assert.Equal(t, want, accounts)
+}
+
+func TestPayChecksTheRequestFirst(t *testing.T) {
+	tests := map[string]struct {
+		req  solanapay.Request
+		want string
+	}{
+		"no reference": {solanapay.Request{Recipient: addr("merchant"), Lamports: 1_000_000}, "shop could not detect"},
+		"no amount":    {solanapay.Request{Recipient: addr("merchant"), References: []string{addr("ref")}}, "names no amount"},
+		"the payer as the recipient": {
+			solanapay.Request{Recipient: addr("payer"), Lamports: 1_000_000, References: []string{addr("ref")}},
+			"the payer is the recipient: pay from another wallet",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			handlers, _ := devnet(t, 0) // unfunded, so a late check would send the user to the faucet first
+			f, client := newFakeRPC(t, handlers)
+
+			_, err := pay(t.Context(), client, testKey("payer"), request(t, tt.req), io.Discard)
+			require.ErrorContains(t, err, tt.want)
+			assert.Empty(t, f.called(), "no RPC call for a request devpay refuses")
+		})
+	}
 }
 
 func TestConfirm(t *testing.T) {
