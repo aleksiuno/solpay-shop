@@ -5,11 +5,13 @@
 {{end}}
 {{- with .Pay}}
 <p class="banner" role="note"><strong>Devnet only.</strong> Switch your wallet to Devnet before paying (Phantom: Settings → Developer Settings → Testnet Mode → Solana Devnet). A mainnet wallet would send real SOL, which this shop never detects.</p>
+<div id="wallets" class="wallets" data-order="{{$.Order.ID}}" hidden></div>
+<p id="pay-status" class="status" role="status" aria-live="polite"></p>
 <p><img class="qr" src="/orders/{{$.Order.ID}}/qr.png" alt="QR code of the payment request"></p>
-<p><a class="button" href="{{.URL}}">Open in wallet</a></p>
+<p><a class="button" href="{{.URL}}">Open in wallet app</a><br><small>On a phone, this opens your wallet app. On a computer, pay with your browser wallet's button, shown above once the page finds the wallet, or scan the QR code with a phone wallet.</small></p>
 <dl class="pay">
 <dt>Amount</dt><dd>{{.Amount}} SOL</dd>
-<dt>Address</dt><dd><code>{{.Recipient}}</code><br><small>A plain Send to this address is not detected: the payment must include the reference account. Use the wallet link, the QR or devpay.</small></dd>
+<dt>Address</dt><dd><code>{{.Recipient}}</code><br><small>A plain Send to this address is not detected: the payment must include the reference account. Use a browser wallet's Pay button, the wallet app link, the QR code or devpay.</small></dd>
 <dt>Reference</dt><dd><code>{{.Reference}}</code></dd>
 <dt>Window closes</dt><dd>{{.Closes}}</dd>
 </dl>

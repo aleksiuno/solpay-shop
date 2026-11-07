@@ -76,10 +76,15 @@ func orderAt(t *testing.T, o order.Order, now time.Time) string {
 const (
 	refresh = `<meta http-equiv="refresh" content="5">`
 	script  = `<script type="module" src="/static/pay.js"></script>`
+	status  = `<p id="pay-status" class="status" role="status" aria-live="polite"></p>` // says how a payment goes
 )
 
-// The payment block, with the devnet banner, the wallet link, the address, the amount, the
-// reference, the deadline and the devpay command, for a pending order before its deadline.
+// wallets is where the script puts its buttons for browser wallets.
+var wallets = `<div id="wallets" class="wallets" data-order="` + orderID.String() + `" hidden></div>`
+
+// The payment block, with the devnet banner, the place of the browser wallets' buttons and their
+// status line, the wallet app link, the address, the amount, the reference, the deadline and the
+// devpay command, for a pending order before its deadline.
 func TestOrderPageShowsHowToPay(t *testing.T) {
 	body := orderAt(t, pending, deadline.Add(-9*time.Minute-10*time.Second))
 	u := payment.Request(pending, merchant).URL()
@@ -87,11 +92,14 @@ func TestOrderPageShowsHowToPay(t *testing.T) {
 	assert.Contains(t, body, "<h1>Waiting for payment</h1>")
 	assert.Contains(t, body, "Go payments checklist, 2 licences, 0.01 SOL")
 	assert.Contains(t, body, "<strong>Devnet only.</strong> Switch your wallet to Devnet before paying")
-	assert.Contains(t, body, `<a class="button" href="`+html.EscapeString(u)+`">Open in wallet</a>`)
+	assert.Contains(t, body, wallets, "empty, and hidden until the script finds a wallet")
+	assert.Contains(t, body, status)
+	assert.Contains(t, body, `<a class="button" href="`+html.EscapeString(u)+`">Open in wallet app</a><br><small>On a phone, this opens your wallet app. `+
+		`On a computer, pay with your browser wallet's button, shown above once the page finds the wallet, or scan the QR code with a phone wallet.</small>`)
 	assert.NotContains(t, body, "ZgotmplZ", "the solana: link is kept")
 	assert.Contains(t, body, "<dd>0.01 SOL</dd>")
 	assert.Contains(t, body, "<code>"+merchant+"</code>")
-	assert.Contains(t, body, "A plain Send to this address is not detected: the payment must include the reference account. Use the wallet link, the QR or devpay.")
+	assert.Contains(t, body, "A plain Send to this address is not detected: the payment must include the reference account. Use a browser wallet's Pay button, the wallet app link, the QR code or devpay.")
 	assert.Contains(t, body, "<code>"+reference+"</code>")
 	assert.Contains(t, body, "<dd>in 10 min (12:10 UTC)</dd>")
 	assert.Contains(t, body, html.EscapeString("go run ./cmd/devpay -keypair data/payer.json '"+u+"'"))
@@ -170,6 +178,8 @@ func TestOrderPageByState(t *testing.T) {
 			assert.Equal(t, tt.refresh && !tt.pay, strings.Contains(strings.ReplaceAll(body, noscript, ""), refresh), "plain refresh")
 			assert.Equal(t, tt.pay, strings.Contains(body, "Devnet only."), "payment block")
 			assert.Equal(t, tt.pay, strings.Contains(body, `href="solana:`), "wallet link")
+			assert.Equal(t, tt.pay, strings.Contains(body, wallets), "browser wallets")
+			assert.Equal(t, tt.pay, strings.Contains(body, status), "status line")
 			assert.Equal(t, tt.pay, strings.Contains(body, `<img class="qr" src="/orders/`+orderID.String()+`/qr.png"`), "QR code")
 			assert.Equal(t, o.Status == order.Paid || o.Status == order.Fulfilled, strings.Contains(body, `href="/d/`), "download link")
 			assert.Equal(t, tt.reload, strings.Contains(body, `<a href="/orders/`+orderID.String()+`">Reload to check again</a>`), "reload link")
@@ -197,4 +207,14 @@ func TestOrderPageWhenTheStoreFails(t *testing.T) {
 	mux, buf := newSite(web.Deps{Orders: &orders{err: errBoom}})
 	requirePage(t, get(mux, "/orders/"+orderID.String()), http.StatusInternalServerError)
 	assert.Equal(t, "ERROR", logLine(t, buf)["level"])
+}
+
+// The script shows the browser wallets' buttons in a flex box, which the hidden attribute keeps
+// off the page until then. A display in the sheet beats the browser's own rule for hidden, so the
+// sheet has its own.
+func TestWalletButtonsStayHiddenUntilTheScriptShowsThem(t *testing.T) {
+	mux, _ := newSite(web.Deps{})
+	css := get(mux, "/static/style.css").Body.String()
+	assert.Contains(t, css, ".wallets { display: flex;")
+	assert.Contains(t, css, ".wallets[hidden] { display: none; }")
 }

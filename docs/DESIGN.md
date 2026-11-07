@@ -140,6 +140,33 @@ start at most 4 calls per 10 s and leave the other limiter turns to the watcher.
 starts for 15 s, the least the watcher waits then too, and requests get a 503 at once: a flood
 cannot keep the shop rate-limited while the watcher backs off.
 
+## Browser wallets
+
+The order page's `pay.js` is the site's first JavaScript: one ES module, with no dependencies and
+no build step, which the page loads while the order can be paid. A wallet extension takes no
+`solana:` link, but it announces itself to a page through the Wallet Standard, a pair of window
+events, so the script needs no wallet library. It dispatches `wallet-standard:app-ready` with a
+`register` function, which a wallet that loaded first calls, and listens for
+`wallet-standard:register-wallet`, with which a wallet that loads later asks to be called back. For
+each wallet that offers `solana:devnet`, `standard:connect` and `solana:signAndSendTransaction`,
+the script shows a "Pay with" button. A click connects the wallet, posts its devnet account to the
+transaction endpoint and hands the answer to the wallet to sign and send. A status line says what
+is happening, and links the signature to the devnet explorer.
+
+Without JavaScript, or without a wallet extension, the page is as it was: the buttons' container
+stays hidden, and the QR code, the wallet app link and devpay pay as before. The meta refresh would
+reload the page in the middle of a wallet's approval, and the wallet would drop the request, so on
+this page it sits in `noscript`, for a browser without JavaScript, and the script reloads the page
+every 5 seconds instead, but not while a payment is in progress. After a send, the tab's session
+storage keeps the signature, so the reloaded page still says that the payment was sent until it
+shows the order paid. The buttons stay off for 2 minutes after a send, so that a customer who
+waits for the shop to see the payment does not pay twice: by then the blockhash, at most 10 s old
+when the shop built the transaction, has expired, and a transaction that has not landed never will.
+The note then says that the shop has not seen the payment, and that the customer can pay again if
+the explorer does not find it. A wallet that does not answer for 2 minutes is given up on, so that
+the page reloads again. The site has no inline script or style, so a Content-Security-Policy can
+forbid both.
+
 ## Idempotency
 
 `products` is the catalogue. `orders` holds the status, the amount fixed when the order is placed,
@@ -164,7 +191,8 @@ the order in a statement after the lock, so at READ COMMITTED they see the lock 
   without a successful poll, once the late window ends.
 - No blockhash for a browser wallet: the transaction endpoint answers `503 rpc_unavailable` with a
   `Retry-After`, and the node's error is logged once per failed call, however many requests waited
-  for it. The QR code and the link still work, since a phone wallet asks its own node.
+  for it. The order page says that the shop could not prepare the payment. The QR code and the
+  wallet app link still work, since a phone wallet asks its own node.
 - A failed devnet check: nothing is polled until the genesis hash check passes; on another cluster
   the server exits 1.
 - Index lag: a listed transaction that the node cannot return yet waits for the next poll, and a
@@ -186,7 +214,7 @@ the order in a statement after the lock, so at READ COMMITTED they see the lock 
 
 ## Out of scope
 
-Not built: accounts, carts, taxes and shipping, mainnet, SPL tokens, wallet adapters, webhooks, a
+Not built: accounts, carts, taxes and shipping, mainnet, SPL tokens, a wallet library, webhooks, a
 message queue, file uploads and on-chain refunds. Known limitations:
 
 - Paid orders are not polled, so a second payment is missed unless the poll that paid the order
@@ -217,5 +245,6 @@ message queue, file uploads and on-chain refunds. Known limitations:
 | One listing per watched reference | one scan of the merchant address | each listing holds only its order's transactions; the scan suits many open orders |
 | Migrations at server start, under an advisory lock | a separate job only | `go run ./cmd/server` needs no extra step; compose runs `-migrate-only` first, for the seed |
 | An injected `now`, and `testing/synctest` | a clock interface | synctest fakes the standard timers, so the code needs no wrapper |
+| The Wallet Standard's two events, in one script | a wallet adapter library | no dependencies or build step for one button; the events are how the extensions announce themselves anyway |
 
 Go 1.27 is required, for the standard library's `uuid` package, which is new in 1.27.

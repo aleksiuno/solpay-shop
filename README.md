@@ -38,25 +38,31 @@ mark refunds, and add and edit products: sign in as `admin` with the `ADMIN_PASS
 ## Paying on devnet
 
 The shop finds a payment by the order's reference alone, so a plain Send to the merchant address,
-or `solana transfer`, is never detected: pay with the QR code, the "Open in wallet" link or devpay,
-a small command in this repository. A Solana Pay URL names no cluster, so a wallet set to mainnet
-would send real SOL, which the shop never detects. Get devnet SOL at <https://faucet.solana.com>,
-which may ask for a GitHub sign-in; `solana airdrop` no longer works on devnet.
+or `solana transfer`, is never detected: pay with a browser wallet's "Pay with" button, the QR
+code, the "Open in wallet app" link or devpay, a small command in this repository. A Solana Pay URL
+names no cluster, so a wallet set to mainnet would send real SOL, which the shop never detects. Get
+devnet SOL at <https://faucet.solana.com>, which may ask for a GitHub sign-in; `solana airdrop` no
+longer works on devnet.
 
 ```sh
 go run ./cmd/devpay -new-keypair data/payer.json   # prints the payer's address to fund
 go run ./cmd/devpay -keypair data/payer.json '<pay URL from the order page>'
 ```
 
-Each reload of the order page clears a text selection, so copy the pay URL from the "Open in
-wallet" link: right-click it and choose Copy link. devpay checks that the RPC node is on devnet,
+Each reload of the order page clears a text selection, so copy the pay URL from the "Open in wallet
+app" link: right-click it and choose Copy link. devpay checks that the RPC node is on devnet,
 refuses a URL without a reference and never overwrites a key file; key files in `data/` are never
 committed. With Go 1.27, `go install github.com/aleksiuno/solpay-shop/cmd/devpay@latest` installs
 it as `devpay`. Without Go, put this in front of the same `go run` commands:
 `docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src -w /src golang:1.27.3-alpine3.24`
 
-Phantom may also work, but only devpay has been tested: switch Phantom to devnet (Settings →
-Developer Settings → Testnet Mode → Solana Devnet), then scan the QR code on the order page.
+On a computer, the order page shows a "Pay with" button for each browser wallet it finds, such as
+Phantom, Solflare or Backpack, whose extensions open no `solana:` link: the shop builds the
+transaction and the wallet signs and sends it. With a phone wallet, scan the QR code on a
+computer's screen, or open the order page on the phone and tap "Open in wallet app". Either way,
+switch the wallet to devnet first (Phantom: Settings → Developer Settings → Testnet Mode → Solana
+Devnet). Only devpay and the button with a scripted wallet in headless Chrome, which paid an order
+on devnet, have been tested; Phantom, Solflare and Backpack have not.
 
 ## API
 

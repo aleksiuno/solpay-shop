@@ -171,7 +171,7 @@ func TestHomeWhenTheRequestIsCanceled(t *testing.T) {
 // staticFiles are the files under /static/, each with its type and a piece of its text.
 var staticFiles = []struct{ name, contentType, piece string }{
 	{"style.css", "text/css; charset=utf-8", "font"},
-	{"pay.js", "text/javascript; charset=utf-8", "location.reload()"},
+	{"pay.js", "text/javascript; charset=utf-8", "wallet-standard:app-ready"},
 }
 
 // Each file has its own type, even on a host whose MIME tables give its extension another, which
