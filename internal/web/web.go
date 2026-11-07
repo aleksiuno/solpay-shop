@@ -92,6 +92,7 @@ type site struct {
 func Register(mux *http.ServeMux, d Deps) {
 	s := site{Deps: d}
 	mux.HandleFunc("GET /static/style.css", static("style.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /static/pay.js", static("pay.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /p/{slug}", s.product)
 	mux.HandleFunc("POST /checkout", s.checkout)
@@ -146,11 +147,16 @@ func static(name, contentType string) http.HandlerFunc {
 }
 
 // view is what the base layout shows around a page: its title, whether it reloads itself every
-// 5 seconds, whether it takes the full width for a wide table, whether it is an admin page and the
-// admin's navigation bar if so, and the page's own data.
+// 5 seconds, its script if it has one, whether it takes the full width for a wide table, whether
+// it is an admin page and the admin's navigation bar if so, and the page's own data.
+//
+// Script names a file in static, which the page loads as a module. On a page that reloads itself,
+// the script does the reloading, and the meta refresh is left to a browser that runs no
+// JavaScript.
 type view struct {
 	Title   string
 	Refresh bool
+	Script  string
 	Wide    bool
 	Admin   bool
 	Nav     []navLink

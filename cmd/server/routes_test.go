@@ -438,7 +438,7 @@ func TestEveryResponseHasTheCommonHeaders(t *testing.T) {
 }
 
 // Each kind of route adds its own headers to the common ones. No cache may keep an admin answer,
-// an answer that shows an order, a download's answer or the health check's; the style sheet is
+// an answer that shows an order, a download's answer or the health check's; the static files are
 // checked on every page; and only the admin routes forbid framing.
 func TestHeadersByRouteKind(t *testing.T) {
 	h := newShop()
@@ -458,6 +458,7 @@ func TestHeadersByRouteKind(t *testing.T) {
 		{"API order", "/api/v1/orders/" + id, false, http.StatusOK, "no-store", ""},
 		{"health check", "/healthz", false, http.StatusOK, "no-store", ""},
 		{"style sheet", "/static/style.css", false, http.StatusOK, "no-cache", ""},
+		{"order page's script", "/static/pay.js", false, http.StatusOK, "no-cache", ""},
 		{"admin order list", "/admin/orders", true, http.StatusOK, "no-store", "DENY"},
 		{"admin order page", "/admin/orders/" + id, true, http.StatusOK, "no-store", "DENY"},
 		{"admin event log", "/admin/events", true, http.StatusOK, "no-store", "DENY"},

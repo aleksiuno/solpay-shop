@@ -36,7 +36,8 @@ type payBlock struct {
 
 // order shows the order whose id is in the path: how to pay it while it can be paid, and its
 // download link once it is paid. While a payment sent on time is still expected, the page reloads
-// itself every 5 seconds. An id that is not a UUID names no order.
+// itself every 5 seconds, by its script while the order can be paid. An id that is not a UUID
+// names no order.
 func (s site) order(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -49,9 +50,13 @@ func (s site) order(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, refresh := s.orderPage(o, s.Now())
+	v := view{Title: page.Heading, Refresh: refresh, Data: page}
+	if page.Pay != nil {
+		v.Script = "pay.js"
+	}
 	// The page's URL is the customer's only key to the order, so no cache may keep it.
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, http.StatusOK, "order.html", view{Title: page.Heading, Refresh: refresh, Data: page})
+	s.render(w, r, http.StatusOK, "order.html", v)
 }
 
 // orderPage returns the page for o at now, and whether it should reload itself.
