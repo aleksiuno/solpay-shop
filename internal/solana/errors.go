@@ -10,13 +10,13 @@ import (
 	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
 )
 
-// Every error that Signatures and Transaction return falls into one of five classes, and
-// CheckDevnet adds a sixth, ErrNotDevnet. A canceled or expired context passes through, so
-// errors.Is finds context.Canceled or context.DeadlineExceeded. Three of the five have a sentinel
-// below, as does ErrNotDevnet. Any other error is transient, such as a refused connection, a 5xx
-// answer or a reply that solana-go cannot parse, and the same call may work on the next tick. The
-// original error stays in the chain, so errors.As still finds a *jsonrpc.RPCError or
-// *jsonrpc.HTTPError.
+// Every error that Signatures, Transaction and LatestBlockhash return falls into one of five
+// classes, and CheckDevnet adds a sixth, ErrNotDevnet. A cancelled or expired context passes
+// through, so errors.Is finds context.Canceled or context.DeadlineExceeded. Three of the five have
+// a sentinel below, as does ErrNotDevnet. Any other error is transient, such as a refused
+// connection, a 5xx answer or a reply that solana-go cannot parse, and the same call may work on
+// the next tick. The original error stays in the chain, so errors.As still finds a
+// *jsonrpc.RPCError or *jsonrpc.HTTPError.
 var (
 	// ErrNotFound: the node returned null for a transaction it has not indexed yet. Retry later.
 	ErrNotFound = errors.New("solana: not found")

@@ -112,6 +112,21 @@ func (c *Client) CheckDevnet(ctx context.Context) error {
 	return nil
 }
 
+// LatestBlockhash returns the newest blockhash at confirmed commitment, in base58, for a new
+// transaction to name. The cluster accepts a transaction that names it for about a minute, until
+// its block height passes the blockhash's last valid one.
+func (c *Client) LatestBlockhash(ctx context.Context) (string, error) {
+	out, err := c.rpc.GetLatestBlockhash(ctx, rpc.CommitmentConfirmed)
+	if err != nil {
+		return "", c.callError(ctx, err)
+	}
+	// solana-go decodes a value without a blockhash to the zero hash, which no block has.
+	if out == nil || out.Value == nil || out.Value.Blockhash.IsZero() {
+		return "", errors.New("solana: getLatestBlockhash returned no blockhash")
+	}
+	return out.Value.Blockhash.String(), nil
+}
+
 // callError returns the error of a failed call, classified and with the endpoint's URL hidden in
 // its message. When ctx has ended, err is reported as the context's error, even if it came from
 // reading a body that the end cut short.
