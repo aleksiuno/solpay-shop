@@ -87,7 +87,7 @@ func serve(t *testing.T, n *node) *solana.Client {
 	return c
 }
 
-// calls are the client's three calls, so that a test of the HTTP layer can run against each.
+// calls are the client's four calls, so that a test of the HTTP layer can run against each.
 var calls = map[string]func(context.Context, *solana.Client) error{
 	"Signatures": func(ctx context.Context, c *solana.Client) error {
 		_, err := c.Signatures(ctx, solanatest.Key("reference"), 100)
@@ -98,6 +98,10 @@ var calls = map[string]func(context.Context, *solana.Client) error{
 		return err
 	},
 	"CheckDevnet": func(ctx context.Context, c *solana.Client) error { return c.CheckDevnet(ctx) },
+	"LatestBlockhash": func(ctx context.Context, c *solana.Client) error {
+		_, err := c.LatestBlockhash(ctx)
+		return err
+	},
 }
 
 func TestSignatures(t *testing.T) {
@@ -148,6 +152,38 @@ func TestCheckDevnet(t *testing.T) {
 	err := c.CheckDevnet(t.Context())
 	require.ErrorIs(t, err, solana.ErrNotDevnet)
 	assert.ErrorContains(t, err, solanatest.Key("another cluster"))
+}
+
+// latestBlockhash is a getLatestBlockhash result that holds hash.
+func latestBlockhash(hash string) map[string]any {
+	return map[string]any{
+		"context": map[string]any{"slot": 517259492},
+		"value":   map[string]any{"blockhash": hash, "lastValidBlockHeight": 505002530},
+	}
+}
+
+func TestLatestBlockhash(t *testing.T) {
+	c := serve(t, &node{
+		method: "getLatestBlockhash",
+		params: `[{"commitment": "confirmed"}]`,
+		result: latestBlockhash(solanatest.Key("blockhash")),
+	})
+	hash, err := c.LatestBlockhash(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, solanatest.Key("blockhash"), hash)
+
+	for name, result := range map[string]any{
+		"a null result":             nil,
+		"a null value":              map[string]any{"context": map[string]any{"slot": 517259492}, "value": nil},
+		"a value with no blockhash": map[string]any{"context": map[string]any{"slot": 517259492}, "value": map[string]any{"lastValidBlockHeight": 505002530}},
+		"the zero blockhash":        latestBlockhash("11111111111111111111111111111111"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := serve(t, &node{result: result}).LatestBlockhash(t.Context())
+			requireClass(t, err, nil, nil)
+			assert.EqualError(t, err, "solana: getLatestBlockhash returned no blockhash")
+		})
+	}
 }
 
 func rpcError(code int, message string) string {
@@ -402,18 +438,26 @@ func TestClientCallsShareTheLimiter(t *testing.T) {
 		mu.Lock()
 		arrived = append(arrived, time.Now())
 		mu.Unlock()
-		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":[]}`)
+		var req struct {
+			Method string `json:"method"`
+		}
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		var result any = []any{}
+		if req.Method == "getLatestBlockhash" {
+			result = latestBlockhash(solanatest.Key("blockhash"))
+		}
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result}))
 	}))
 	t.Cleanup(srv.Close)
 	c, err := solana.New(srv.URL)
 	require.NoError(t, err)
 
-	for range 2 {
-		_, err := c.Signatures(t.Context(), solanatest.Key("reference"), 100)
-		require.NoError(t, err)
-	}
+	_, err = c.Signatures(t.Context(), solanatest.Key("reference"), 100)
+	require.NoError(t, err)
+	_, err = c.LatestBlockhash(t.Context())
+	require.NoError(t, err)
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, arrived, 2)
-	assert.GreaterOrEqual(t, arrived[1].Sub(arrived[0]), 1200*time.Millisecond, "the second call waits for the limiter")
+	assert.GreaterOrEqual(t, arrived[1].Sub(arrived[0]), 1200*time.Millisecond, "the second call waits for the limiter, whatever its method")
 }
