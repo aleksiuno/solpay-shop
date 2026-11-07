@@ -73,7 +73,10 @@ func orderAt(t *testing.T, o order.Order, now time.Time) string {
 	return body
 }
 
-const refresh = `<meta http-equiv="refresh" content="5">`
+const (
+	refresh = `<meta http-equiv="refresh" content="5">`
+	script  = `<script type="module" src="/static/pay.js"></script>`
+)
 
 // The payment block, with the devnet banner, the wallet link, the address, the amount, the
 // reference, the deadline and the devpay command, for a pending order before its deadline.
@@ -92,13 +95,15 @@ func TestOrderPageShowsHowToPay(t *testing.T) {
 	assert.Contains(t, body, "<code>"+reference+"</code>")
 	assert.Contains(t, body, "<dd>in 10 min (12:10 UTC)</dd>")
 	assert.Contains(t, body, html.EscapeString("go run ./cmd/devpay -keypair data/payer.json '"+u+"'"))
-	assert.Contains(t, body, refresh)
+	assert.Contains(t, body, script)
+	assert.Contains(t, body, "<noscript>"+refresh+"</noscript>", "the script reloads the page")
 	assert.NotContains(t, body, `href="/d/`)
 }
 
 // Each state of the order shows its own text under a heading that is also the page's title, so
 // that a tab in the background shows the state, and the page reloads itself only while a payment
-// sent on time is still expected.
+// sent on time is still expected. While the order can be paid, the page's script reloads it, and
+// the meta refresh is only for a browser without JavaScript.
 func TestOrderPageByState(t *testing.T) {
 	paidAt := deadline.Add(-5 * time.Minute)
 	underpaid := pending
@@ -159,6 +164,10 @@ func TestOrderPageByState(t *testing.T) {
 				assert.Contains(t, body, text)
 			}
 			assert.Equal(t, tt.refresh, strings.Contains(body, refresh), "refresh")
+			noscript := "<noscript>" + refresh + "</noscript>"
+			assert.Equal(t, tt.pay, strings.Contains(body, script), "script")
+			assert.Equal(t, tt.pay, strings.Contains(body, noscript), "refresh without JavaScript only")
+			assert.Equal(t, tt.refresh && !tt.pay, strings.Contains(strings.ReplaceAll(body, noscript, ""), refresh), "plain refresh")
 			assert.Equal(t, tt.pay, strings.Contains(body, "Devnet only."), "payment block")
 			assert.Equal(t, tt.pay, strings.Contains(body, `href="solana:`), "wallet link")
 			assert.Equal(t, tt.pay, strings.Contains(body, `<img class="qr" src="/orders/`+orderID.String()+`/qr.png"`), "QR code")
