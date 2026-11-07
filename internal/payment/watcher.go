@@ -88,7 +88,7 @@ func DefaultConfig(pollInterval time.Duration) Config {
 		LateCadence:      time.Minute,
 		RPCTimeout:       10 * time.Second,
 		MaxBackoff:       time.Minute,
-		RateLimitBackoff: 15 * time.Second,
+		RateLimitBackoff: rateLimitBackoff,
 	}
 }
 

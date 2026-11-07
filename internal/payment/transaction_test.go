@@ -2,10 +2,13 @@ package payment_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -25,10 +28,11 @@ var _ payment.Blockhasher = (*solana.Client)(nil)
 
 // node is an RPC node whose LatestBlockhash takes a second, on the clock of the synctest bubble it
 // runs in, and returns a new blockhash on every call, or the error that fail holds for the next
-// one.
+// one, or down for every one.
 type node struct {
 	mu        sync.Mutex
 	fail      error
+	down      error
 	deadlines []time.Duration // how long each call's context had before its deadline
 }
 
@@ -36,7 +40,7 @@ func (n *node) LatestBlockhash(ctx context.Context) (string, error) {
 	d, _ := ctx.Deadline()
 	n.mu.Lock()
 	n.deadlines = append(n.deadlines, time.Until(d))
-	call, err := len(n.deadlines), n.fail
+	call, err := len(n.deadlines), cmp.Or(n.fail, n.down)
 	n.fail = nil
 	n.mu.Unlock()
 	time.Sleep(time.Second)
@@ -131,35 +135,97 @@ func TestBuildFetchesANewBlockhashAfterTenSeconds(t *testing.T) {
 	})
 }
 
-// A failed fetch is not kept: the next caller fetches again. The failure is logged.
+// A failed fetch is not kept: the next caller waits for a new one, which starts 2.5 s after the
+// failed one began. The failure is logged.
 func TestBuildFetchesAgainAfterAFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		n := &node{fail: errBoom}
 		txs, buf := newTransactions(n, time.Now)
+		start := time.Now()
 		_, _, err := txs.Build(t.Context(), underpaid, payer)
-		require.ErrorIs(t, err, payment.ErrNoBlockhash)
+		var e *payment.NoBlockhashError
+		require.ErrorAs(t, err, &e)
 		require.ErrorIs(t, err, errBoom)
-		assert.Contains(t, buf.String(), `"level":"ERROR","msg":"no blockhash from the RPC node","error":"boom"}`)
+		assert.Equal(t, 1500*time.Millisecond, e.RetryAfter, "until 2.5 s after the fetch began")
+		assert.Contains(t, buf.String(),
+			`"level":"ERROR","msg":"no blockhash from the RPC node","error":"boom","retry_after":1500000000}`)
 
 		tx, _, err := txs.Build(t.Context(), underpaid, payer)
 		require.NoError(t, err)
 		assert.Equal(t, paysTheRest(t, 2), tx)
+		assert.Equal(t, 3500*time.Millisecond, time.Since(start), "from a fetch at 2.5 s")
 		assert.Equal(t, 2, n.calls())
 	})
 }
 
-// A blockhash whose age is negative, after the clock stepped back, is stale.
+// While the node fails, however many callers ask, fetches start 2.5 s apart; once the node has
+// rate-limited one, none starts for 15 s, and callers get its error at once. Each failed fetch is
+// logged once.
+func TestBuildPacesTheFetchesWhileTheNodeFails(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		calls   int           // node calls
+		retry   time.Duration // the longest a caller is told to wait
+		answers int           // errors to the callers
+	}{
+		// Fetches at 0, 2.5, 5 ... 17.5 s, each failing all 50 callers 1 s later.
+		{"refused", errBoom, 8, 1500 * time.Millisecond, 8 * 50},
+		// Fetches at 0 and 16 s, and an answer at once every 100 ms after the first one fails.
+		{"rate limited", fmt.Errorf("%w: HTTP 429", solana.ErrRateLimited), 2, 15 * time.Second, 166 * 50},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				n := &node{down: tt.err}
+				txs, buf := newTransactions(n, time.Now)
+				// 50 callers ask every 100 ms until 18.55 s, after the last answer and before another ask.
+				ctx, cancel := context.WithTimeout(t.Context(), 18550*time.Millisecond)
+				defer cancel()
+				var mu sync.Mutex
+				var retries []time.Duration
+				var wg sync.WaitGroup
+				for range 50 {
+					wg.Go(func() {
+						for ctx.Err() == nil {
+							var e *payment.NoBlockhashError
+							if _, _, err := txs.Build(ctx, underpaid, payer); errors.As(err, &e) {
+								mu.Lock()
+								retries = append(retries, e.RetryAfter)
+								mu.Unlock()
+							}
+							time.Sleep(100 * time.Millisecond)
+						}
+					})
+				}
+				wg.Wait()
+				assert.Equal(t, tt.calls, n.calls())
+				assert.Equal(t, tt.retry, slices.Max(retries))
+				assert.Len(t, retries, tt.answers)
+				assert.Equal(t, tt.calls, strings.Count(buf.String(), `"msg":"no blockhash from the RPC node"`))
+			})
+		})
+	}
+}
+
+// After the clock stepped back, a blockhash whose age is below zero is stale, and so is the pause
+// after a failure.
 func TestBuildFetchesAgainAfterTheClockStepsBack(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		n := &node{}
 		var back time.Duration
 		txs, _ := newTransactions(n, func() time.Time { return time.Now().Add(-back) })
+		start := time.Now()
 		_, _, err := txs.Build(t.Context(), underpaid, payer)
 		require.NoError(t, err)
-		back = time.Minute
+		back, n.fail = time.Minute, errBoom
+		_, _, err = txs.Build(t.Context(), underpaid, payer)
+		require.ErrorIs(t, err, errBoom, "a fetch, not the blockhash fetched 1 s before")
+		back = 2 * time.Minute
 		tx, _, err := txs.Build(t.Context(), underpaid, payer)
 		require.NoError(t, err)
-		assert.Equal(t, paysTheRest(t, 2), tx)
+		assert.Equal(t, paysTheRest(t, 3), tx)
+		assert.Equal(t, 3*time.Second, time.Since(start), "no pause after the failure")
 	})
 }
 

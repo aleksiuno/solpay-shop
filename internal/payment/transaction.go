@@ -20,7 +20,7 @@ type Transactions struct {
 
 // NewTransactions returns Transactions for payments to merchant, with blockhashes from node, whose
 // failures go to log. now times the blockhashes: outside tests it is time.Now, since their age is
-// real time, not the time the shop stores.
+// real time, not the time the shop stores, and the cache waits on the standard timers.
 func NewTransactions(node Blockhasher, merchant string, now func() time.Time, log *slog.Logger) *Transactions {
 	return &Transactions{merchant: merchant, blockhashes: &blockhashCache{node: node, now: now, log: log}}
 }
@@ -28,7 +28,7 @@ func NewTransactions(node Blockhasher, merchant string, now func() time.Time, lo
 // Build returns the unsigned transaction, in wire format, with which payer pays what Request(o,
 // merchant) asks for, and the request's label and message for the wallet to show, such as
 // "solpay-shop (devnet): Go payments checklist". The transaction names a blockhash whose fetch
-// began less than 10 s before; when the node gives none, the error wraps ErrNoBlockhash.
+// began less than 10 s before; when the node gives none, the error is a *NoBlockhashError.
 //
 // Build is meant for an order that can be paid now, as Order.Payable says, and does not check.
 // It refuses a payer that is not an address or is the merchant, but only once it has the
