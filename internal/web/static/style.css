@@ -34,10 +34,18 @@ button, .button {
   display: inline-block; padding: 0.5rem 1rem; border: 0; border-radius: 0.375rem;
   background: var(--accent); color: #fff; font: inherit; text-decoration: none; cursor: pointer;
 }
+:is(button, .button):focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 .problem { color: var(--bad); font-weight: 600; }
 .notice { color: var(--muted); }
 .qr { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .banner { padding: 0.75rem 1rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 0.375rem; }
+.wallets { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+.wallets[hidden] { display: none; }
+.wallets button { display: inline-flex; align-items: center; gap: 0.5rem; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.wallets button:disabled { opacity: 0.6; cursor: progress; }
+.wallets img { flex: none; }
+.status:not(:empty) { padding: 0.5rem 0.75rem; background: #f0f1f4; border-left: 4px solid var(--accent); overflow-wrap: anywhere; }
+.status.problem { border-left-color: var(--bad); }
 .pay { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 1rem; }
 .pay dt { font-weight: 600; }
 .pay dd { margin: 0; overflow-wrap: anywhere; }

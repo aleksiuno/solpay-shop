@@ -52,7 +52,7 @@ func (s site) order(w http.ResponseWriter, r *http.Request) {
 	page, refresh := s.orderPage(o, s.Now())
 	v := view{Title: page.Heading, Refresh: refresh, Data: page}
 	if page.Pay != nil {
-		v.Script = "pay.js"
+		v.Script = "pay.js" // the browser wallets' buttons, and the reload
 	}
 	// The page's URL is the customer's only key to the order, so no cache may keep it.
 	w.Header().Set("Cache-Control", "no-store")
