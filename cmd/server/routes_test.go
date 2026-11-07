@@ -94,6 +94,11 @@ func (l eventLog) List(context.Context, audit.ListFilter) ([]audit.Event, error)
 	return []audit.Event{ev}, nil
 }
 
+// node is an RPC node whose newest blockhash is always the same.
+type node struct{}
+
+func (node) LatestBlockhash(context.Context) (string, error) { return solanatest.Key("blockhash"), nil }
+
 // newShop returns the server's real handler over a shop that holds the placed order and its
 // event, so that the routes that show an order answer 200. Its clock stands a minute after the
 // order was placed, while the order can be paid. Its download service, as newRouter's, has no
@@ -110,7 +115,8 @@ func newShop() http.Handler {
 			OrderAdmin: book, Ledger: book, EventLog: events, Log: log,
 		},
 		httpapi.Deps{
-			DB: pinger{}, Products: catalogue{}, Orders: book, Downloads: downloads, OrderAdmin: book,
+			DB: pinger{}, Products: catalogue{}, Orders: book, Downloads: downloads,
+			Transactions: payment.NewTransactions(node{}, merchant, time.Now, log), OrderAdmin: book,
 			Ledger: book, EventLog: events, Merchant: merchant, Now: clock, Log: log,
 		})
 }
@@ -252,10 +258,12 @@ func TestPublicRoutesNeedNoCredentials(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "Nothing is for sale yet.", "the shop's home page")
 }
 
-// A cross-site form cannot place an order, through the API or the shop's checkout: the refusal
-// comes before the order service, which newRouter leaves unset.
+// A cross-site form cannot place an order, through the API or the shop's checkout, nor ask for a
+// transaction: the refusal comes before the order service, which newRouter leaves unset.
 func TestCrossSiteOrdersAreRefused(t *testing.T) {
-	for _, path := range []string{"/api/v1/orders", "/checkout"} {
+	for _, path := range []string{
+		"/api/v1/orders", "/api/v1/orders/" + placed.ID.String() + "/transaction", "/checkout",
+	} {
 		w := request(newRouter(), http.MethodPost, path, crossSite)
 		assert.Equal(t, http.StatusForbidden, w.Code, path)
 		assert.Equal(t, "forbidden", errorCode(t, w), path)
@@ -474,6 +482,23 @@ func TestHeadersByRouteKind(t *testing.T) {
 			assert.Equal(t, tt.frames, sent.Get("X-Frame-Options"))
 		})
 	}
+}
+
+// The transaction route answers a POST with the transaction that pays the order, through the
+// payment package's builder, and no cache may keep it.
+func TestOrderTransactionRoute(t *testing.T) {
+	h := newShop()
+	path := "/api/v1/orders/" + placed.ID.String() + "/transaction"
+	body := `{"account": "` + solanatest.Key("payer") + `"}`
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	sent := w.Result().Header
+	assert.Equal(t, "nosniff", sent.Get("X-Content-Type-Options"))
+	assert.Equal(t, "same-origin", sent.Get("Referrer-Policy"))
+	assert.Equal(t, "no-store", sent.Get("Cache-Control"))
+	assert.Empty(t, sent.Get("X-Frame-Options"))
+	assert.Contains(t, w.Body.String(), `"message":"solpay-shop (devnet): Go payments checklist"}`)
 }
 
 // The clock that the order service and the API share is in UTC, in the microseconds that Postgres

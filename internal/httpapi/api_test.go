@@ -92,6 +92,7 @@ func TestUnknownAPIPaths(t *testing.T) {
 		{http.MethodDelete, "/api/v1/products/go-payments-checklist", http.StatusMethodNotAllowed, "GET, HEAD"},
 		{http.MethodGet, "/api/v1/orders", http.StatusMethodNotAllowed, "POST"},
 		{http.MethodPost, "/api/v1/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodGet, "/api/v1/orders/3c9e6f1a-2b4d-4e8f-a1c3-5d7e9f0b2c4e/transaction", http.StatusMethodNotAllowed, "POST"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
