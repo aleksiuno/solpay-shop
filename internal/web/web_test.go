@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"strings"
 	"testing"
 	"uuid"
@@ -166,46 +168,64 @@ func TestHomeWhenTheRequestIsCanceled(t *testing.T) {
 	assert.Equal(t, "server: shutdown timed out", line["cause"], "the context's cause, not only that it ended")
 }
 
-func TestStaticStyles(t *testing.T) {
-	mux, _ := newSite(web.Deps{})
-	w := get(mux, "/static/style.css")
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "text/css; charset=utf-8", w.Header().Get("Content-Type"))
-	assert.Contains(t, w.Body.String(), "font")
+// staticFiles are the files under /static/, each with its type and a piece of its text.
+var staticFiles = []struct{ name, contentType, piece string }{
+	{"style.css", "text/css; charset=utf-8", "font"},
+}
 
+// Each file has its own type, even on a host whose MIME tables give its extension another, which
+// http.ServeContent would use. The test changes Go's process-wide table, so it is not parallel.
+func TestStaticFiles(t *testing.T) {
+	for _, f := range staticFiles {
+		ext := path.Ext(f.name)
+		was := mime.TypeByExtension(ext)
+		require.NoError(t, mime.AddExtensionType(ext, "application/x-host-table"))
+		t.Cleanup(func() { require.NoError(t, mime.AddExtensionType(ext, was)) })
+	}
+	mux, _ := newSite(web.Deps{})
+	for _, f := range staticFiles {
+		w := get(mux, "/static/"+f.name)
+		assert.Equal(t, http.StatusOK, w.Code, f.name)
+		assert.Equal(t, f.contentType, w.Header().Get("Content-Type"), f.name)
+		assert.Contains(t, w.Body.String(), f.piece, f.name)
+	}
 	for _, path := range []string{"/static/missing.css", "/static/", "/static/..%2ftemplates%2fbase.html"} {
 		assert.Equal(t, http.StatusNotFound, get(mux, path).Code, path)
 	}
 }
 
-// A browser that has the style sheet asks for it by its ETag on every page, and gets a 304 without
-// the sheet while it is the same. The tag is made from the sheet's bytes: a fixed one would answer
-// 304 to a copy of the sheet from before a deploy, and the browser would keep it.
-func TestStaticStylesAreRevalidatedByTheirTag(t *testing.T) {
+// A browser that has a static file asks for it by its ETag on every page, and gets a 304 without
+// the file while it is the same. The tag is made from the file's bytes: a fixed one would answer
+// 304 to a copy of the file from before a deploy, and the browser would keep it.
+func TestStaticFilesAreRevalidatedByTheirTag(t *testing.T) {
 	mux, _ := newSite(web.Deps{})
-	w := get(mux, "/static/style.css")
-	require.Equal(t, http.StatusOK, w.Code)
-	sum := sha256.Sum256(w.Body.Bytes())
-	tag := `"` + hex.EncodeToString(sum[:8]) + `"`
-	sent := w.Result().Header // as written with the status, not as set later
-	assert.Equal(t, tag, sent.Get("ETag"), "a strong tag made from the sheet")
-	assert.Equal(t, "no-cache", sent.Get("Cache-Control"))
+	for _, f := range staticFiles {
+		t.Run(f.name, func(t *testing.T) {
+			w := get(mux, "/static/"+f.name)
+			require.Equal(t, http.StatusOK, w.Code)
+			sum := sha256.Sum256(w.Body.Bytes())
+			tag := `"` + hex.EncodeToString(sum[:8]) + `"`
+			sent := w.Result().Header // as written with the status, not as set later
+			assert.Equal(t, tag, sent.Get("ETag"), "a strong tag made from the file")
+			assert.Equal(t, "no-cache", sent.Get("Cache-Control"))
 
-	ask := func(ifNoneMatch string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodGet, "/static/style.css", nil)
-		r.Header.Set("If-None-Match", ifNoneMatch)
-		return serve(mux, r)
+			ask := func(ifNoneMatch string) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(http.MethodGet, "/static/"+f.name, nil)
+				r.Header.Set("If-None-Match", ifNoneMatch)
+				return serve(mux, r)
+			}
+			w = ask(tag)
+			assert.Equal(t, http.StatusNotModified, w.Code)
+			assert.Empty(t, w.Body.String())
+			sent = w.Result().Header
+			assert.Equal(t, tag, sent.Get("ETag"))
+			assert.Equal(t, "no-cache", sent.Get("Cache-Control"))
+
+			w = ask(`"an-older-copy"`)
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Contains(t, w.Body.String(), f.piece)
+		})
 	}
-	w = ask(tag)
-	assert.Equal(t, http.StatusNotModified, w.Code)
-	assert.Empty(t, w.Body.String())
-	sent = w.Result().Header
-	assert.Equal(t, tag, sent.Get("ETag"))
-	assert.Equal(t, "no-cache", sent.Get("Cache-Control"))
-
-	w = ask(`"an-older-sheet"`)
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "font")
 }
 
 // A path that no route serves, with any method, gets the error page in the site's layout, as an
