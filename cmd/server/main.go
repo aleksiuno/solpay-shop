@@ -177,7 +177,8 @@ func run(logger *slog.Logger, cfg config.Config, migrateOnly bool) error {
 		Ledger: paymentStore, EventLog: eventStore, Log: logger,
 	}
 	api := httpapi.Deps{
-		DB: pool, Products: products, Orders: orders, Downloads: downloads, ProductAdmin: products,
+		DB: pool, Products: products, Orders: orders, Downloads: downloads,
+		Transactions: payment.NewTransactions(chain, cfg.MerchantAddress, time.Now, logger), ProductAdmin: products,
 		OrderAdmin: orders, Ledger: paymentStore, EventLog: eventStore, Merchant: cfg.MerchantAddress, Now: now,
 		Log: logger,
 	}

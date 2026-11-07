@@ -17,6 +17,8 @@ type Deps struct {
 	Products  Products
 	Orders    Orders
 	Downloads Downloads
+	// Transactions builds the transactions that browser wallets sign to pay orders.
+	Transactions Transactions
 	// ProductAdmin, OrderAdmin, Ledger and EventLog serve the admin API.
 	ProductAdmin ProductAdmin
 	OrderAdmin   OrderAdmin
@@ -44,6 +46,15 @@ type Downloads interface {
 	Link(o order.Order) (string, bool)
 }
 
+// Transactions builds the transactions with which browser wallets pay orders.
+// *payment.Transactions is one.
+type Transactions interface {
+	// Build returns the unsigned transaction, in wire format, with which payer pays what remains
+	// of o, and a message for the wallet to show. When the RPC node gives no blockhash, the error
+	// is a *payment.NoBlockhashError.
+	Build(ctx context.Context, o order.Order, payer string) ([]byte, string, error)
+}
+
 // api serves the JSON API with its Deps.
 type api struct {
 	Deps
@@ -57,5 +68,6 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /api/v1/products/{slug}", a.getProduct)
 	mux.HandleFunc("POST /api/v1/orders", a.createOrder)
 	mux.HandleFunc("GET /api/v1/orders/{id}", a.getOrder)
+	mux.HandleFunc("POST /api/v1/orders/{id}/transaction", a.orderTransaction)
 	mux.Handle("/api/v1/", unknown(mux, "/api/v1/"))
 }

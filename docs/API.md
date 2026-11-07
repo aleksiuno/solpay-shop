@@ -51,8 +51,10 @@ change.
 | `product_inactive` | 409 | an order for a product that is no longer for sale |
 | `slug_taken` | 409 | an admin create or update with a slug that another product has |
 | `invalid_transition` | 409 | a refund the order's status does not allow, such as for a pending order, or for an expired one that no payment reached after its deadline |
+| `not_payable` | 409 | a transaction for an order that cannot be paid now: one that is not `pending` or `underpaid`, or is past its deadline |
 | `unauthorized` | 401 | an admin path without the right basic auth credentials |
 | `forbidden` | 403 | a browser request from another origin with an unsafe method |
+| `rpc_unavailable` | 503 | the Solana RPC node gave no blockhash for a transaction; the details are logged, never sent, and `Retry-After` says in how many seconds to ask again |
 | `internal` | 500 | anything else; the details are logged, never sent |
 
 ## Endpoints
@@ -152,8 +154,10 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
   `remaining_lamports` what is still to pay, never below 0.
 - `payment` says how to pay what remains: the Solana Pay URL, and the recipient and reference it
   names. The payment must list the reference as an extra account, as Solana Pay wallets and devpay
-  do; a plain transfer to the recipient is not detected. `payment` is `null` once the order can no
-  longer be paid: in any status other than `pending` and `underpaid`, and after `expires_at`.
+  do; a plain transfer to the recipient is not detected. A wallet that cannot open the URL, such as
+  a browser extension, can get the transaction from `POST /api/v1/orders/{id}/transaction` instead.
+  `payment` is `null` once the order can no longer be paid: in any status other than `pending` and
+  `underpaid`, and after `expires_at`.
 - After `expires_at`, a `pending` order has no `payment` block but stays `pending` while the shop
   makes a final check for payments sent in time. That check takes at least two minutes. It takes
   longer while the RPC node fails, since only a poll that reads the order's reference can expire
@@ -168,6 +172,57 @@ curl localhost:8080/api/v1/orders/<ORDER_ID>
   link, which works for 15 minutes.
 
 Errors: `404 not_found` for an unknown id or one that is not a UUID.
+
+### `POST /api/v1/orders/{id}/transaction`
+
+Builds the transaction that pays what remains of an order, for a wallet to sign and send. It is
+for a wallet that cannot open `payment.url`, such as a wallet extension in a desktop browser, which
+registers no handler for `solana:` links.
+
+```sh
+curl localhost:8080/api/v1/orders/<ORDER_ID>/transaction -d '{"account": "<PAYER>"}'
+```
+
+```json
+{
+  "transaction": "<TRANSACTION>",
+  "message": "solpay-shop (devnet): Go payments checklist (2 licences)"
+}
+```
+
+- `account`, required, is the base58 address of the wallet that pays. It also pays the fee, and is
+  the only signer.
+- `transaction` is the unsigned transaction in wire format, in base64: the transfer that a wallet
+  makes from `payment.url`, of `remaining_lamports` from the account to `payment.recipient`, with
+  `payment.reference` as a read-only account. It is a legacy transaction with one zeroed
+  signature, which the wallet fills when it signs.
+- The transaction names a devnet blockhash at most 10 s old, so devnet takes it for about a minute
+  and mainnet never does. Ask again for a new one after that. Each answer pays what remains when it
+  is made, so ask again after a payment too.
+- `message` says what the payment is for, for the wallet to show: the label and message of
+  `payment.url`, joined by a colon.
+
+The body and the answer have the shapes of the `POST` of a Solana Pay transaction request, but this
+is not a transaction request endpoint: it has no `GET` for a label and an icon, it sends no CORS
+headers, and a browser on another origin is refused, as for any `POST`. Answers carry
+`Cache-Control: no-store`.
+
+Errors:
+
+- `400 invalid_request` for a body that is not acceptable (see Conventions);
+- `422 validation_failed` for a missing account, one that is not the base58 encoding of 32 bytes,
+  or the shop's own address, which cannot pay itself;
+- `404 not_found` for an unknown id or one that is not a UUID;
+- `409 not_payable` when the order has no `payment` block: it is not `pending` or `underpaid`, or
+  it is past `expires_at`;
+- `503 rpc_unavailable` when the RPC node gives no blockhash. `Retry-After` says in how many
+  seconds the shop asks the node again: a failure is not kept, but the next call starts 2.5 s
+  after the failed one began, and none starts for 15 s after the node rate-limited one. Until then,
+  a request waits for the next call, or after a rate limit gets the 503 at once.
+
+The checks run in this order, and a request that is wrong in more than one way gets the first
+answer that fits: the id (`404`), the body (`400`), the account (`422`), the order (`404`, then
+`409`), and last the node (`503`).
 
 ### `GET /d/{id}`
 

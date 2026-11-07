@@ -125,6 +125,21 @@ a reference, so the repository's devpay pays a Solana Pay URL as a wallet does, 
 Solana Pay URL names no cluster, so a mainnet wallet would pay real SOL that the shop never sees;
 the order page warns about this, and prices are a few thousandths of a SOL.
 
+A wallet extension in a desktop browser registers no handler for `solana:` links, so for one
+`POST /api/v1/orders/{id}/transaction` builds the transfer that the URL asks for, from the wallet's
+account, for the wallet to sign and send. The server builds it, not the browser, because it needs a
+recent blockhash, and the RPC URL may carry an API key that must never reach a browser. A devnet
+blockhash also makes the transaction invalid on mainnet, a safety net beside the page's warning.
+One blockhash serves every request for 10 s from the start of its fetch, and requests that arrive
+during a fetch wait for it. While the node answers, however many requests come, they make at most
+one `getLatestBlockhash` call per 10 s, of the 8 that the limiter allows. A blockhash stays valid
+for about 60 to 90 s, so a wallet has at least 50 s to sign. A failed fetch is not kept, so one
+failure does not refuse every request for 10 s, but the next fetch starts 2.5 s after the failed
+one began, and requests that arrive meanwhile wait for it. While the node fails, requests thus
+start at most 4 calls per 10 s and leave the other limiter turns to the watcher. After a 429, no fetch
+starts for 15 s, the least the watcher waits then too, and requests get a 503 at once: a flood
+cannot keep the shop rate-limited while the watcher backs off.
+
 ## Idempotency
 
 `products` is the catalogue. `orders` holds the status, the amount fixed when the order is placed,
@@ -147,6 +162,9 @@ the order in a statement after the lock, so at READ COMMITTED they see the lock 
   default 10, 20, 40 s, then a minute), at least 15 s after a 429. A listing that can never
   succeed ends only its order's poll; it is the one failure that lets a pending order expire
   without a successful poll, once the late window ends.
+- No blockhash for a browser wallet: the transaction endpoint answers `503 rpc_unavailable` with a
+  `Retry-After`, and the node's error is logged once per failed call, however many requests waited
+  for it. The QR code and the link still work, since a phone wallet asks its own node.
 - A failed devnet check: nothing is polled until the genesis hash check passes; on another cluster
   the server exits 1.
 - Index lag: a listed transaction that the node cannot return yet waits for the next poll, and a

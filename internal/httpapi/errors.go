@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/aleksiuno/solpay-shop/internal/order"
+	"github.com/aleksiuno/solpay-shop/internal/payment"
 	"github.com/aleksiuno/solpay-shop/internal/product"
 )
 
@@ -21,6 +24,8 @@ const (
 	codeProductInactive   = "product_inactive"
 	codeSlugTaken         = "slug_taken"
 	codeInvalidTransition = "invalid_transition"
+	codeNotPayable        = "not_payable"
+	codeRPCUnavailable    = "rpc_unavailable"
 	codeUnauthorized      = "unauthorized"
 	codeForbidden         = "forbidden"
 	codeInternal          = "internal"
@@ -69,6 +74,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (a api) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var invalid *order.ValidationError
 	var invalidProduct *product.ValidationError
+	var noBlockhash *payment.NoBlockhashError
 	switch {
 	case errors.As(err, &invalid):
 		writeError(w, http.StatusUnprocessableEntity, codeValidationFailed, invalid.Field+" "+invalid.Reason)
@@ -88,6 +94,11 @@ func (a api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusNotFound, codeNotFound, "no such order")
 	case errors.Is(err, order.ErrProductInactive):
 		writeError(w, http.StatusConflict, codeProductInactive, "the product is not for sale")
+	case errors.As(err, &noBlockhash):
+		// The node's error is logged where the fetch failed, once for all the requests that waited.
+		secs := max(1, int(math.Ceil(noBlockhash.RetryAfter.Seconds()))) // whole seconds, rounded up
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		writeError(w, http.StatusServiceUnavailable, codeRPCUnavailable, "the Solana RPC node is unavailable; try again shortly")
 	case r.Context().Err() != nil:
 		// The client hung up, or the server is stopping: nothing went wrong in the shop, and no one
 		// reads the answer.
